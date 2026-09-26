@@ -1,0 +1,336 @@
+// Firestore güvenlik kuralı testleri. Emülatörde çalışır: npm run test:rules
+
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from "@firebase/rules-unit-testing";
+import { readFileSync } from "node:fs";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  increment,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
+} from "firebase/firestore";
+import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
+
+const EMAIL_DOMAIN = "users.kalometre.firebaseapp.com";
+let env: RulesTestEnvironment;
+
+const profile = (over: Record<string, unknown> = {}) => ({
+  username: "kaan",
+  name: "Kaan",
+  sex: "male",
+  birthYear: 1996,
+  heightCm: 180,
+  sports: [{ sportId: "running", daysPerWeek: 3 }],
+  ...over,
+});
+
+const goal = (over: Record<string, unknown> = {}) => ({
+  startWeightKg: 92,
+  startDate: "2026-09-26",
+  targetWeightKg: 80,
+  paceKgPerMonth: 4,
+  targetDate: "2099-01-01",
+  dailyCalories: 1500,
+  mealCalories: { breakfast: 450, lunch: 600, dinner: 450 },
+  lockedUntil: "2099-01-01",
+  ...over,
+});
+
+const UNLOCKED = { startDate: "2020-01-01", targetDate: "2020-01-10", lockedUntil: "2020-01-10" };
+
+const entry = (over: Record<string, unknown> = {}) => ({
+  category: "food",
+  meal: "breakfast",
+  rawText: "2 simit",
+  items: [{ name: "Simit", amount: "2 adet", grams: 200, kcal: 550 }],
+  totalKcal: 550,
+  aiKcal: 550,
+  editedByUser: false,
+  createdAt: serverTimestamp(),
+  ...over,
+});
+
+/** Giriş yapmış kullanıcının Firestore'u (e-posta = kullanıcı adı + sabit alan adı). */
+const as = (uid: string, username = uid) =>
+  env.authenticatedContext(uid, { email: `${username}@${EMAIL_DOMAIN}` }).firestore();
+const anon = () => env.unauthenticatedContext().firestore();
+
+/** Kuralları atlayarak hazır veri yazar. */
+async function seed(path: string, data: Record<string, unknown>) {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), path), data);
+  });
+}
+
+async function seedUser(uid: string, goalOver: Record<string, unknown> = {}) {
+  await seed(`users/${uid}`, { profile: profile({ username: uid }), goal: goal(goalOver), createdAt: Timestamp.now() });
+}
+
+beforeAll(async () => {
+  env = await initializeTestEnvironment({
+    projectId: "demo-kalometre",
+    firestore: { rules: readFileSync(process.env.RULES_FILE ?? "firestore.rules", "utf8"), host: "127.0.0.1", port: 8080 },
+  });
+});
+
+beforeEach(async () => {
+  await env.clearFirestore();
+});
+
+afterAll(async () => {
+  await env?.cleanup();
+});
+
+// ---------------------------------------------------------------------------
+
+describe("erişim izolasyonu", () => {
+  it("kullanıcı kendi dokümanını okur", async () => {
+    await seedUser("kaan");
+    await assertSucceeds(getDoc(doc(as("kaan"), "users/kaan")));
+  });
+
+  it("başka kullanıcının dokümanını ve alt koleksiyonlarını okuyamaz", async () => {
+    await seedUser("kaan");
+    await seed("users/kaan/weights/2026-09-26", { weightKg: 92, createdAt: Timestamp.now() });
+    await assertFails(getDoc(doc(as("ali"), "users/kaan")));
+    await assertFails(getDoc(doc(as("ali"), "users/kaan/weights/2026-09-26")));
+    await assertFails(getDocs(collection(as("ali"), "users/kaan/weights")));
+  });
+
+  it("giriş yapmamış kullanıcı hiçbir şey okuyamaz/yazamaz", async () => {
+    await seedUser("kaan");
+    await assertFails(getDoc(doc(anon(), "users/kaan")));
+    await assertFails(setDoc(doc(anon(), "users/x"), { profile: profile(), goal: goal(), createdAt: serverTimestamp() }));
+  });
+
+  it("tüm kullanıcılar listelenemez", async () => {
+    await assertFails(getDocs(collection(as("kaan"), "users")));
+  });
+
+  it("tanımsız koleksiyonlar kapalı", async () => {
+    await assertFails(setDoc(doc(as("kaan"), "secrets/x"), { a: 1 }));
+    await assertFails(getDoc(doc(as("kaan"), "secrets/x")));
+  });
+});
+
+describe("users/{uid} oluşturma", () => {
+  const create = (uid: string, data: Record<string, unknown>, username = uid) =>
+    setDoc(doc(as(uid, username), `users/${uid}`), data);
+  const valid = (over: Record<string, unknown> = {}) => ({
+    profile: profile({ username: "kaan" }),
+    goal: goal(),
+    createdAt: serverTimestamp(),
+    ...over,
+  });
+
+  it("geçerli onboarding kaydı kabul edilir", async () => {
+    await assertSucceeds(create("kaan", valid()));
+  });
+
+  it("başkasının uid'ine yazılamaz", async () => {
+    await assertFails(setDoc(doc(as("ali"), "users/kaan"), valid()));
+  });
+
+  it("profildeki kullanıcı adı hesabın kullanıcı adı olmalı", async () => {
+    await assertFails(create("kaan", valid({ profile: profile({ username: "admin" }) })));
+  });
+
+  it("izin verilmeyen alan reddedilir", async () => {
+    await assertFails(create("kaan", valid({ isAdmin: true })));
+    await assertFails(create("kaan", valid({ profile: { ...profile(), role: "admin" } })));
+    await assertFails(create("kaan", valid({ goal: { ...goal(), bonus: 1 } })));
+  });
+
+  it("createdAt sunucu zamanı olmalı", async () => {
+    await assertFails(create("kaan", valid({ createdAt: Timestamp.fromDate(new Date(2000, 0, 1)) })));
+  });
+
+  it("sağlık tabanı: erkek 1500, kadın 1200 kcal altı reddedilir", async () => {
+    await assertFails(
+      create("kaan", valid({ goal: goal({ dailyCalories: 1400, mealCalories: { breakfast: 400, lunch: 600, dinner: 400 } }) })),
+    );
+    await assertSucceeds(
+      create(
+        "kaan",
+        valid({
+          profile: profile({ sex: "female" }),
+          goal: goal({ dailyCalories: 1200, mealCalories: { breakfast: 400, lunch: 400, dinner: 400 } }),
+        }),
+      ),
+    );
+  });
+
+  it("öğün toplamı günlük kaloriye eşit olmalı", async () => {
+    await assertFails(create("kaan", valid({ goal: goal({ mealCalories: { breakfast: 500, lunch: 600, dinner: 450 } }) })));
+  });
+
+  it("geçersiz değerler reddedilir", async () => {
+    await assertFails(create("kaan", valid({ profile: profile({ heightCm: 400 }) })));
+    await assertFails(create("kaan", valid({ profile: profile({ sex: "other" }) })));
+    await assertFails(create("kaan", valid({ profile: profile({ name: "" }) })));
+    await assertFails(create("kaan", valid({ profile: profile({ bodyFatPct: 90 }) })));
+    await assertFails(create("kaan", valid({ profile: profile({ sports: [{ sportId: "running", daysPerWeek: 9 }] }) })));
+    await assertFails(create("kaan", valid({ goal: goal({ paceKgPerMonth: 20 }) })));
+    await assertFails(create("kaan", valid({ goal: goal({ targetWeightKg: 100 }) })));
+    await assertFails(create("kaan", valid({ goal: goal({ startDate: "26.09.2026" }) })));
+  });
+});
+
+describe("users/{uid} güncelleme ve kilit", () => {
+  it("kilitliyken isim değişebilir", async () => {
+    await seedUser("kaan");
+    await assertSucceeds(updateDoc(doc(as("kaan"), "users/kaan"), { profile: profile({ name: "Kaan K" }) }));
+  });
+
+  it("kilitliyken hedef değişemez", async () => {
+    await seedUser("kaan");
+    await assertFails(updateDoc(doc(as("kaan"), "users/kaan"), { goal: goal({ dailyCalories: 2000, mealCalories: { breakfast: 600, lunch: 800, dinner: 600 } }) }));
+  });
+
+  it("kilitliyken profilin diğer alanları değişemez", async () => {
+    await seedUser("kaan");
+    await assertFails(updateDoc(doc(as("kaan"), "users/kaan"), { profile: profile({ heightCm: 170 }) }));
+  });
+
+  it("kilit bitince yeni plan yazılabilir", async () => {
+    await seedUser("kaan", UNLOCKED);
+    await assertSucceeds(
+      updateDoc(doc(as("kaan"), "users/kaan"), {
+        profile: profile({ heightCm: 181 }),
+        goal: goal({ startDate: "2026-09-26", targetWeightKg: 75 }),
+      }),
+    );
+  });
+
+  it("createdAt değiştirilemez", async () => {
+    await seedUser("kaan");
+    await assertFails(updateDoc(doc(as("kaan"), "users/kaan"), { createdAt: serverTimestamp() }));
+  });
+
+  it("kullanıcı dokümanı silinemez", async () => {
+    await seedUser("kaan");
+    await assertFails(deleteDoc(doc(as("kaan"), "users/kaan")));
+  });
+});
+
+describe("weights", () => {
+  const w = (weightKg: unknown, over: Record<string, unknown> = {}) => ({ weightKg, createdAt: serverTimestamp(), ...over });
+
+  it("geçerli kilo yazılır, aynı gün üzerine yazılır, silinir", async () => {
+    const db = as("kaan");
+    await assertSucceeds(setDoc(doc(db, "users/kaan/weights/2026-09-26"), w(92.4)));
+    await assertSucceeds(setDoc(doc(db, "users/kaan/weights/2026-09-26"), w(91.8)));
+    await assertSucceeds(deleteDoc(doc(db, "users/kaan/weights/2026-09-26")));
+  });
+
+  it("aralık dışı kilo, yanlış tarih kimliği ve fazla alan reddedilir", async () => {
+    const db = as("kaan");
+    await assertFails(setDoc(doc(db, "users/kaan/weights/2026-09-26"), w(500)));
+    await assertFails(setDoc(doc(db, "users/kaan/weights/2026-09-26"), w("92")));
+    await assertFails(setDoc(doc(db, "users/kaan/weights/bugun"), w(92)));
+    await assertFails(setDoc(doc(db, "users/kaan/weights/2026-13-01"), w(92)));
+    await assertFails(setDoc(doc(db, "users/kaan/weights/2026-09-26"), w(92, { note: "x" })));
+  });
+
+  it("başkasının kilosuna yazılamaz", async () => {
+    await assertFails(setDoc(doc(as("ali"), "users/kaan/weights/2026-09-26"), w(92)));
+  });
+});
+
+describe("days: su ve AI sayacı", () => {
+  const day = "users/kaan/days/2026-09-26";
+
+  it("su eklenir ve azaltılır", async () => {
+    const db = as("kaan");
+    await assertSucceeds(setDoc(doc(db, day), { waterMl: increment(250) }, { merge: true }));
+    await assertSucceeds(setDoc(doc(db, day), { waterMl: 0 }, { merge: true }));
+  });
+
+  it("negatif ya da aşırı su reddedilir", async () => {
+    const db = as("kaan");
+    await assertFails(setDoc(doc(db, day), { waterMl: -250 }));
+    await assertFails(setDoc(doc(db, day), { waterMl: 999999 }));
+  });
+
+  it("AI sayacı yalnızca 1'er artar", async () => {
+    const db = as("kaan");
+    await assertSucceeds(setDoc(doc(db, day), { aiRequests: 1 }, { merge: true }));
+    await assertSucceeds(setDoc(doc(db, day), { aiRequests: 2 }, { merge: true }));
+    await assertFails(setDoc(doc(db, day), { aiRequests: 5 }, { merge: true }));
+  });
+
+  it("AI sayacı azaltılamaz, sıfırlanamaz, yüksek başlatılamaz", async () => {
+    await seed(day, { aiRequests: 30 });
+    const db = as("kaan");
+    await assertFails(setDoc(doc(db, day), { aiRequests: 0 }, { merge: true }));
+    await assertFails(setDoc(doc(db, day), { waterMl: 0 }));
+    await assertFails(setDoc(doc(as("kaan"), "users/kaan/days/2026-09-27"), { aiRequests: 40 }));
+  });
+
+  it("AI sayacı 50'yi geçemez", async () => {
+    await seed(day, { aiRequests: 50 });
+    await assertFails(setDoc(doc(as("kaan"), day), { aiRequests: 51 }, { merge: true }));
+  });
+
+  it("gün dokümanı silinemez (sayaç sıfırlanmasın)", async () => {
+    await seed(day, { aiRequests: 10, waterMl: 500 });
+    await assertFails(deleteDoc(doc(as("kaan"), day)));
+  });
+});
+
+describe("entries", () => {
+  const col = "users/kaan/days/2026-09-26/entries";
+
+  it("geçerli kayıt eklenir, düzenlenir, silinir", async () => {
+    const db = as("kaan");
+    await assertSucceeds(setDoc(doc(db, `${col}/e1`), entry()));
+    await assertSucceeds(
+      updateDoc(doc(db, `${col}/e1`), {
+        meal: "dinner",
+        items: [{ name: "Simit", amount: "2 adet", grams: 200, kcal: 600 }],
+        totalKcal: 600,
+        editedByUser: true,
+      }),
+    );
+    await assertSucceeds(deleteDoc(doc(db, `${col}/e1`)));
+  });
+
+  it("geçersiz kayıtlar reddedilir", async () => {
+    const db = as("kaan");
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ extra: 1 })));
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ category: "pizza" })));
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ items: [] })));
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ items: [{ name: "X", amount: "", grams: 0, kcal: 6000 }] })));
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ items: [{ name: "X", amount: "", grams: 0, kcal: 10, hack: 1 }] })));
+    await assertFails(
+      setDoc(doc(db, `${col}/e1`), entry({ items: Array.from({ length: 21 }, () => ({ name: "X", amount: "", grams: 1, kcal: 1 })) })),
+    );
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ rawText: "x".repeat(501) })));
+    await assertFails(setDoc(doc(db, `${col}/e1`), entry({ createdAt: Timestamp.now() })));
+  });
+
+  it("ham metin ve kategori sonradan değiştirilemez", async () => {
+    const db = as("kaan");
+    await assertSucceeds(setDoc(doc(db, `${col}/e1`), entry()));
+    await assertFails(updateDoc(doc(db, `${col}/e1`), { rawText: "değişti" }));
+    await assertFails(updateDoc(doc(db, `${col}/e1`), { category: "snack" }));
+    await assertFails(updateDoc(doc(db, `${col}/e1`), { createdAt: serverTimestamp() }));
+  });
+
+  it("başkasının kayıtlarına erişilemez", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), `${col}/e1`), entry()));
+    await assertFails(getDoc(doc(as("ali"), `${col}/e1`)));
+    await assertFails(setDoc(doc(as("ali"), `${col}/e2`), entry()));
+    await assertFails(deleteDoc(doc(as("ali"), `${col}/e1`)));
+  });
+});

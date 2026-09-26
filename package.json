@@ -1,0 +1,37 @@
+{
+  "name": "kalometre",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b",
+    "emulators": "firebase emulators:start --only auth,firestore --project demo-kalometre",
+    "deploy": "npm run build && firebase deploy --only hosting",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kalometre \"vitest run --config vitest.rules.config.ts\"",
+    "dev:emu": "vite --mode emulator",
+    "deploy:rules": "firebase deploy --only firestore:rules"
+  },
+  "dependencies": {
+    "@bible-strong/avatar-react": "^0.1.0",
+    "firebase": "^12.19.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-router": "^7.18.4",
+    "recharts": "^3.10.1"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "firebase-tools": "^15.31.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}

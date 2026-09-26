@@ -1,0 +1,229 @@
+rules_version = '2';
+
+// Kalometre Firestore güvenlik kuralları.
+// İlke: her şey varsayılan olarak KAPALI; yalnızca aşağıda açıkça izin verilenler yapılabilir.
+//  - Kullanıcı yalnızca users/{kendi uid}/** altına erişir.
+//  - Yazılan her doküman alan alan doğrulanır (izin verilen alanlar, tipler, aralıklar).
+//  - createdAt sunucu zamanıdır ve sonradan değiştirilemez.
+//  - Günlük AI sayacı yalnızca 1'er artabilir, azaltılamaz, gün dokümanı silinemez.
+//  - Plan kilitliyken hedef ve profil (isim hariç) değiştirilemez.
+// Testler: tests/rules/firestore.rules.test.ts  (npm run test:rules)
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Yardımcılar ----------
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function isNum(v, min, max) {
+      return (v is int || v is float) && v >= min && v <= max;
+    }
+
+    function isInt(v, min, max) {
+      return v is int && v >= min && v <= max;
+    }
+
+    function isStr(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    function isDateKey(v) {
+      return v is string && v.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$');
+    }
+
+    function data() {
+      return request.resource.data;
+    }
+
+    // Değişmeyen alanlar dışında hiçbir şey değişmedi mi?
+    function onlyChanged(keys) {
+      return data().diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // ---------- users/{uid} ----------
+
+    function validSport(s) {
+      return s is map
+        && s.keys().hasOnly(['sportId', 'daysPerWeek'])
+        && s.keys().hasAll(['sportId', 'daysPerWeek'])
+        && isStr(s.sportId, 1, 20) && s.sportId.matches('^[a-z]+$')
+        && isInt(s.daysPerWeek, 1, 7);
+    }
+
+    // Kurallarda döngü yok; en fazla 10 spor tek tek kontrol edilir.
+    function sportAt(list, i) {
+      return list.size() <= i || validSport(list[i]);
+    }
+
+    function validSports(list) {
+      return list is list && list.size() <= 10
+        && sportAt(list, 0) && sportAt(list, 1) && sportAt(list, 2) && sportAt(list, 3) && sportAt(list, 4)
+        && sportAt(list, 5) && sportAt(list, 6) && sportAt(list, 7) && sportAt(list, 8) && sportAt(list, 9);
+    }
+
+    function validProfile(p) {
+      return p is map
+        && p.keys().hasOnly(['username', 'name', 'sex', 'birthYear', 'heightCm', 'bodyFatPct', 'sports'])
+        && p.keys().hasAll(['username', 'name', 'sex', 'birthYear', 'heightCm', 'sports'])
+        // Kullanıcı adı, giriş yapılan hesabın kullanıcı adıyla aynı olmalı (başkası gibi görünemez).
+        && p.username is string
+        && request.auth.token.email == p.username + '@users.kalometre.firebaseapp.com'
+        && isStr(p.name, 1, 24)
+        && p.sex in ['male', 'female']
+        && isInt(p.birthYear, request.time.year() - 100, request.time.year() - 10)
+        && isNum(p.heightCm, 100, 250)
+        && (!('bodyFatPct' in p) || isNum(p.bodyFatPct, 3, 70))
+        && validSports(p.sports);
+    }
+
+    function validMeals(m, daily) {
+      return m is map
+        && m.keys().hasOnly(['breakfast', 'lunch', 'dinner'])
+        && m.keys().hasAll(['breakfast', 'lunch', 'dinner'])
+        && isInt(m.breakfast, 100, 10000)
+        && isInt(m.lunch, 100, 10000)
+        && isInt(m.dinner, 100, 10000)
+        && m.breakfast + m.lunch + m.dinner == daily;
+    }
+
+    function validGoal(g, sex) {
+      return g is map
+        && g.keys().hasOnly(['startWeightKg', 'startDate', 'targetWeightKg', 'paceKgPerMonth', 'targetDate', 'dailyCalories', 'mealCalories', 'lockedUntil'])
+        && g.keys().hasAll(['startWeightKg', 'startDate', 'targetWeightKg', 'paceKgPerMonth', 'targetDate', 'dailyCalories', 'mealCalories', 'lockedUntil'])
+        && isNum(g.startWeightKg, 30, 300)
+        && isNum(g.targetWeightKg, 30, 300)
+        && g.targetWeightKg <= g.startWeightKg
+        && g.paceKgPerMonth in [0, 3, 4, 6]
+        && isDateKey(g.startDate) && isDateKey(g.targetDate) && isDateKey(g.lockedUntil)
+        && g.targetDate >= g.startDate
+        && g.lockedUntil > g.startDate
+        // Sağlık tabanı sunucuda da zorunlu: kadın 1200, erkek 1500 kcal.
+        && isInt(g.dailyCalories, sex == 'male' ? 1500 : 1200, 6000)
+        && validMeals(g.mealCalories, g.dailyCalories);
+    }
+
+    function validUser(d) {
+      return d.keys().hasOnly(['profile', 'goal', 'createdAt'])
+        && d.keys().hasAll(['profile', 'goal', 'createdAt'])
+        && validProfile(d.profile)
+        && validGoal(d.goal, d.profile.sex);
+    }
+
+    // lockedUntil yerel tarihtir; sunucu saat dilimini bilmez. En doğudaki saat dilimine (UTC+14)
+    // göre gece yarısı açılır — batıdaki kullanıcı için kilit en fazla ~14 saat erken açılabilir.
+    function lockEnds(key) {
+      let parts = key.split('-');
+      return timestamp.date(int(parts[0]), int(parts[1]), int(parts[2])) - duration.value(14, 'h');
+    }
+
+    function isLocked() {
+      return request.time < lockEnds(resource.data.goal.lockedUntil);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      allow create: if isOwner(uid)
+        && validUser(data())
+        && data().createdAt == request.time;
+
+      allow update: if isOwner(uid)
+        && validUser(data())
+        && data().createdAt == resource.data.createdAt
+        && (!isLocked()
+            || (data().goal == resource.data.goal
+                && data().profile.diff(resource.data.profile).affectedKeys().hasOnly(['name'])));
+
+      // Hesap silme henüz yok; eklenince sunucu tarafında (Cloud Function) yapılmalı.
+      allow delete: if false;
+
+      // ---------- users/{uid}/weights/{date} ----------
+      match /weights/{date} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && isDateKey(date)
+          && data().keys().hasOnly(['weightKg', 'createdAt'])
+          && data().keys().hasAll(['weightKg', 'createdAt'])
+          && isNum(data().weightKg, 30, 300)
+          && data().createdAt == request.time;
+        allow delete: if isOwner(uid);
+      }
+
+      // ---------- users/{uid}/days/{date} ----------
+      match /days/{date} {
+        function validDay(d) {
+          return d.keys().hasOnly(['waterMl', 'aiRequests'])
+            && (!('waterMl' in d) || isInt(d.waterMl, 0, 20000))
+            && (!('aiRequests' in d) || isInt(d.aiRequests, 0, 50));
+        }
+
+        allow read: if isOwner(uid);
+
+        allow create: if isOwner(uid)
+          && isDateKey(date)
+          && validDay(data())
+          && data().get('aiRequests', 0) <= 1;
+
+        // AI sayacı yalnızca aynı kalabilir ya da tam 1 artabilir.
+        allow update: if isOwner(uid)
+          && validDay(data())
+          && (data().get('aiRequests', 0) == resource.data.get('aiRequests', 0)
+              || data().get('aiRequests', 0) == resource.data.get('aiRequests', 0) + 1);
+
+        // Silinirse AI sayacı sıfırlanırdı.
+        allow delete: if false;
+
+        // ---------- users/{uid}/days/{date}/entries/{id} ----------
+        match /entries/{id} {
+          function validItem(it) {
+            return it is map
+              && it.keys().hasOnly(['name', 'amount', 'grams', 'kcal'])
+              && it.keys().hasAll(['name', 'amount', 'grams', 'kcal'])
+              && isStr(it.name, 1, 80)
+              && isStr(it.amount, 0, 40)
+              && isNum(it.grams, 0, 5000)
+              && isNum(it.kcal, 0, 5000);
+          }
+
+          function itemAt(list, i) {
+            return list.size() <= i || validItem(list[i]);
+          }
+
+          function validItems(list) {
+            return list is list && list.size() >= 1 && list.size() <= 20
+              && itemAt(list, 0) && itemAt(list, 1) && itemAt(list, 2) && itemAt(list, 3) && itemAt(list, 4)
+              && itemAt(list, 5) && itemAt(list, 6) && itemAt(list, 7) && itemAt(list, 8) && itemAt(list, 9)
+              && itemAt(list, 10) && itemAt(list, 11) && itemAt(list, 12) && itemAt(list, 13) && itemAt(list, 14)
+              && itemAt(list, 15) && itemAt(list, 16) && itemAt(list, 17) && itemAt(list, 18) && itemAt(list, 19);
+          }
+
+          function validEntry(d) {
+            return d.keys().hasOnly(['category', 'meal', 'rawText', 'items', 'totalKcal', 'aiKcal', 'editedByUser', 'createdAt'])
+              && d.keys().hasAll(['category', 'meal', 'rawText', 'items', 'totalKcal', 'aiKcal', 'editedByUser', 'createdAt'])
+              && d.category in ['food', 'drink', 'snack']
+              && d.meal in ['breakfast', 'lunch', 'dinner']
+              && isStr(d.rawText, 0, 500)
+              && validItems(d.items)
+              && isNum(d.totalKcal, 0, 20000)
+              && isNum(d.aiKcal, 0, 100000)
+              && d.editedByUser is bool;
+          }
+
+          allow read: if isOwner(uid);
+          allow create: if isOwner(uid)
+            && isDateKey(date)
+            && validEntry(data())
+            && data().createdAt == request.time;
+          allow update: if isOwner(uid)
+            && validEntry(data())
+            && data().createdAt == resource.data.createdAt
+            && onlyChanged(['items', 'meal', 'totalKcal', 'editedByUser']);
+          allow delete: if isOwner(uid);
+        }
+      }
+    }
+  }
+}

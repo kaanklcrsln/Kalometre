@@ -1,0 +1,136 @@
+# Kalometre
+
+Kalori takip web uygulaması (MVP). React + Vite + TypeScript, Firebase (Auth, Firestore, AI Logic, App Check, Hosting).
+
+## Gereksinimler
+
+- Node.js 20+ (22 ile test edildi)
+- Emülatör kullanacaksan **Java 21+** (firebase-tools 15, Java 17'yi kabul etmiyor)
+- `firebase-tools` projeye devDependency olarak kurulu: `npx firebase ...`
+
+## 1. Firebase projesi
+
+Proje `kalometre` zaten açık. Yeni bir proje açacaksan:
+
+1. [Firebase Console](https://console.firebase.google.com) → **Proje ekle**.
+2. **Proje ayarları → Genel → Uygulamalarınız → Web (</>)** ile bir web uygulaması ekle; çıkan `firebaseConfig` değerlerini `.env` dosyasına yaz (bkz. 5. adım).
+3. **Authentication → Başlayın → Oturum açma yöntemi**: yalnızca **E-posta/Şifre** sağlayıcısını etkinleştir ("E-posta bağlantısı" kapalı kalsın). Uygulama kullanıcı adı + şifre kullanır; kullanıcı adı arka planda `kullaniciadi@users.kalometre.firebaseapp.com` biçiminde sentetik bir e-postaya çevrilir ve bu adrese hiçbir zaman e-posta gönderilmez. Bu yüzden şifre sıfırlama yok.
+   - **Authentication → Ayarlar → Yetkili alan adları**: `localhost` ve Hosting alan adın (`kalometre.web.app`) listede olmalı.
+4. **Firestore Database → Veritabanı oluştur** → üretim modu, bölge olarak `eur3` veya `europe-west`.
+
+## 2. Firebase AI Logic (Gemini Developer API)
+
+1. Console'da **AI Logic** (Yapay zekâ → AI Logic) → **Başlayın**.
+2. **Gemini Developer API**'yi seç. Console gerekli API'leri (Generative Language API + Firebase AI Logic API) açar ve Gemini API anahtarını **sunucu tarafında** tutar. Anahtar istemci koduna hiçbir zaman girmez.
+3. Model adını doğrula: [src/config/ai.ts](src/config/ai.ts) içindeki `GEMINI_MODEL` (şu an `gemini-3.5-flash-lite`). AI Studio'daki model listesinde tam adı kontrol et.
+4. İsteğe bağlı maliyet ayarı: model destekliyorsa `GEMINI_THINKING_LEVEL = "MINIMAL"` yap.
+
+## 3. App Check (reCAPTCHA Enterprise)
+
+1. Google Cloud Console → **reCAPTCHA Enterprise** → API'yi etkinleştir → **Anahtar oluştur** (tür: Web sitesi, alan adları: `localhost`, `kalometre.web.app`, `kalometre.firebaseapp.com`).
+2. Firebase Console → **App Check → Uygulamalar** → web uygulamanı **reCAPTCHA Enterprise** ile kaydet, site anahtarını gir.
+3. Site anahtarını `.env` içindeki `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY` alanına yaz.
+4. **Geliştirme için debug token:** `.env` içinde `VITE_APPCHECK_DEBUG=true` iken `npm run dev` ile açtığında tarayıcı konsolunda bir debug token yazar. Onu **App Check → Uygulamalar → ⋮ → Debug token'ları yönet** kısmına ekle.
+5. Her şey çalıştıktan sonra **App Check → API'ler** kısmında **Firebase AI Logic** için **Zorunlu kıl (Enforce)** düğmesine bas. (Sonra Firestore ve Authentication için de açılabilir.)
+
+## 4. Firestore güvenlik kuralları
+
+[firestore.rules](firestore.rules) varsayılan olarak her şeyi kapatır; yalnızca açıkça izin verilenler yapılabilir:
+
+- Kullanıcı yalnızca `users/{kendi uid}/**` altına erişir; kullanıcı listesi okunamaz, tanımsız koleksiyonlar kapalı.
+- Her doküman alan alan doğrulanır: izin verilmeyen alan eklenemez, tip ve aralıklar kontrol edilir.
+- Profildeki kullanıcı adı, giriş yapılan hesabın kullanıcı adıyla aynı olmak zorunda.
+- Sağlık tabanı sunucuda da geçerli: günlük kalori kadında 1200, erkekte 1500'ün altında kaydedilemez; öğün toplamı günlük kaloriye eşit olmalı.
+- `createdAt` sunucu zamanıdır, değiştirilemez; kaydın ham metni ve kategorisi sonradan değiştirilemez.
+- Plan kilitliyken hedef ve profil (isim hariç) değiştirilemez.
+- Günlük AI sayacı yalnızca 1'er artar, azaltılamaz, 50'yi geçemez; gün dokümanı silinemez.
+- Kullanıcı dokümanı istemciden silinemez (hesap silme ileride sunucu tarafında yapılmalı).
+
+Kural testleri (32 test, emülatörde, Java 21 gerekir): `npm run test:rules`
+
+Gerçek projeye yüklemek için: `npx firebase login` → `npm run deploy:rules`
+
+> AI sayacı kötüye kullanıma karşı tek başına koruma değildir; Gemini çağrısı Firestore'dan geçmez. Asıl koruma **App Check (Enforce)** ve Firebase Console → AI Logic → **kullanıcı başına istek sınırı** ayarıdır.
+
+## 5. Ortam değişkenleri
+
+`.env.example` dosyasını `.env` olarak kopyala ve doldur:
+
+| Değişken | Açıklama |
+|---|---|
+| `VITE_FIREBASE_*` | Firebase web yapılandırması (gizli değil, istemcide görünür) |
+| `VITE_RECAPTCHA_ENTERPRISE_SITE_KEY` | App Check site anahtarı; boşsa App Check kapalı |
+| `VITE_APPCHECK_DEBUG` | `true` → geliştirmede debug token kullan |
+| `VITE_USE_EMULATORS` | `true` → Auth ve Firestore emülatörlerine bağlan |
+
+`.env` dosyası `.gitignore`'da.
+
+## 6. Çalıştırma
+
+```bash
+npm install
+npm run dev          # http://localhost:5173
+npm test             # hesaplama birim testleri (vitest)
+npm run build        # tip kontrolü + üretim derlemesi
+```
+
+### Emülatörle (gerçek projeye dokunmadan)
+
+```bash
+npm run emulators   # 1. terminal — Auth + Firestore (kurallar dahil)
+npm run dev:emu     # 2. terminal — .env.emulator ile emülatöre bağlanır
+```
+
+Emülatör verisi kapatınca silinir.
+
+Emülatör arayüzü: http://127.0.0.1:4000. Not: AI Logic'in emülatörü yok; emülatör modunda AI çağrısı "yapılandırılmamış" hatası verir ve **elle kalori girme** akışı devreye girer.
+
+## 7. Deploy
+
+```bash
+npx firebase login
+npm run deploy                                 # yalnızca hosting
+npm run deploy:rules                           # Firestore kuralları
+```
+
+## Ürün kuralları
+
+- **Renkler:** yalnızca 4 renk — Deep Teal `#4E6E58` (olumlu), Brick Red `#BB0A21` (olumsuz), Coffee Bean `#261C15` ve Porcelain `#F7F7F2` (genel). CSS'te [src/styles.css](src/styles.css) `:root` değişkenleri, SVG/grafiklerde [src/config/theme.ts](src/config/theme.ts).
+- **Font:** `font/` klasöründeki Rubik değişken fontu (normal + italik), derlemede pakete dahil edilir.
+- **Kalori hedefi:** bazal metabolizma − seçilen hızın açığı (Acelem yok 3 / Olması gerektiği gibi 4 / Acelem var 6 kg/ay; 1 kg = 7700 kcal, 1 ay = 30 gün). Spor hedefe eklenmez.
+- **Sağlık tabanı:** günlük hedef kadında 1200, erkekte 1500 kcal'nin altına inmez. Taban devreye girerse hedef tarihi spor dahil tahmini harcamaya (bazal × 1,2 + spor) göre dürüstçe yeniden hesaplanır ve kullanıcıya söylenir. Hedef VKİ < 18,5 ve 18 yaş altında kilo verme reddedilir.
+- **Spor:** her antrenman 1 saat sayılır; harcama = (MET − 1) × kg × gün / 7. MET değerleri [src/config/sports.ts](src/config/sports.ts).
+- **Kilit:** günlük kalori ve öğün dağılımı hedef tarihine kadar (koruma planında 30 gün) değiştirilemez; yeni kilo girmek hedefi değiştirmez. Kilit bitince Ayarlar → "Yeni plan oluştur".
+- **Sohbet:** Gemini ile sohbet; son 10 mesaj gönderilir, geçmiş yalnızca bellekte tutulur. Her mesaj günlük 50 AI hakkından düşer.
+
+## Avatar
+
+- Tanım: kök dizindeki [avatar/unknown.avatar.json](avatar/unknown.avatar.json) (`@bible-strong/avatar-react`). Renkler kodda paletle sabitlenir: gövde Porcelain, gözler Coffee Bean ([src/avatar/definition.ts](src/avatar/definition.ts)). JSON'u yeniden dışa aktarırsan dosyanın üzerine yazman yeterli.
+- Hesap oluşturma boyunca (karşılama, onboarding, yeni plan) ekranın boş alanlarında gezer: içerik ölçülür, çakışmayan bir nokta seçilir ([src/avatar/placement.ts](src/avatar/placement.ts)). Adım değişince hemen, sonra 5–8 sn'de bir yer değiştirir; içerik üstüne gelirse kaçar. Yer yoksa küçülür (104 → 80 → 60 px).
+- Duygular = animasyon adları. Hangi ekranda hangi duygunun oynatılacağı [src/avatar/moods.ts](src/avatar/moods.ts) içinde tek yerde.
+  - Ekranın temel duygusu: `useAvatarMood("happy", "sahne-adı")`
+  - Tıklamaya tepki: `<button {...onTapMood("celebrate")}>`
+  - Kod içinden tepki: `useAvatar().react("surprised")`
+  - Otomatik: yazı yazarken `listening`, şifre yazarken `shy`, avatara dokununca `laughing`.
+- Avatar yüklenemezse ya da hata verirse gizlenir; uygulamayı etkilemez. Kodu tembel yüklenir, giriş yapmış kullanıcı indirmez.
+
+## Mimari
+
+```
+src/
+  config/     firebase.ts (init + App Check + emülatör), ai.ts (model, talimatlar, sınırlar), sports.ts, theme.ts
+  services/   auth.ts, db.ts, ai.ts — Firebase'e dokunan TEK katman (Capacitor'a geçişte yalnızca burası değişir)
+  lib/        calculations.ts (tüm formüller), username.ts, dates.ts, aiResponse.ts, numbers.ts, validation.ts — saf fonksiyonlar + testler
+  hooks/      tüm durum ve mantık (useOnboarding, useAddEntry, useDay, useChat, useSettings, useWeightPage, ...)
+  components/ sade, mantıksız görünüm bileşenleri
+  pages/      Welcome, Onboarding, Home, AddEntry, Chat, Settings, Weight
+```
+
+Görünüm `components/`, `pages/` ve `styles.css`'te; mantık hook'larda.
+
+### Veri modeli notları
+
+- Tarih anahtarları (`yyyy-mm-dd`) kullanıcının yerel saat dilimine göre üretilir.
+- Günlük AI istek sayacı `users/{uid}/days/{bugün}.aiRequests` alanında tutulur (istemci tarafı sınır: 50/gün). Kullanıcı kendi dokümanını yazabildiği için bu **kötüye kullanıma karşı gerçek bir koruma değildir**; asıl koruma App Check + AI Logic kotalarıdır.
+- `users/{uid}.goal`: `startWeightKg, startDate, targetWeightKg, paceKgPerMonth, targetDate, dailyCalories, mealCalories {breakfast,lunch,dinner} (kcal), lockedUntil`. `profile`: `username, name, sex, birthYear, heightCm, bodyFatPct?, sports [{sportId, daysPerWeek}]`.
+- Kayıt toplamı (`totalKcal`) her zaman kodda kalemlerden hesaplanır; Gemini'nin toplamı kullanılmaz. `aiKcal` Gemini kalemlerinin ilk toplamıdır (elle girişte 0).
