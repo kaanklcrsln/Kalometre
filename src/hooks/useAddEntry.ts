@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { clampItemKcal, MAX_ITEM_KCAL, MAX_ITEM_NAME, suggestMeal, sumKcal } from "../lib/calculations";
+import { CATEGORY_LABELS } from "../config/ai";
 import { todayKey } from "../lib/dates";
 import { AiServiceError, analyzeFood } from "../services/ai";
 import { addEntry, addWater } from "../services/db";
@@ -73,7 +74,7 @@ export function useAddEntry(uid: string, dateKey: string, onDone: () => void) {
       return;
     }
     reset();
-    const item: FoodItem = { name: (name.trim() || text.trim() || "Manuel kayıt").slice(0, MAX_ITEM_NAME), amount: "", grams: 0, kcal: clampItemKcal(kcal) };
+    const item: FoodItem = { name: (name.trim() || text.trim() || CATEGORY_LABELS[category]).slice(0, MAX_ITEM_NAME), amount: "", grams: 0, kcal: clampItemKcal(kcal) };
     setAiItems([]);
     setItems([item]);
     setAssumptions("");
@@ -100,7 +101,8 @@ export function useAddEntry(uid: string, dateKey: string, onDone: () => void) {
         items,
         totalKcal: total,
         aiKcal,
-        editedByUser: isManual || items.some((it, i) => it.kcal !== aiItems[i]?.kcal),
+        // "Düzenlendi" = yapay zekânın tahmini değiştirildi; elle girişte AI yok, düzenleme de yok.
+        editedByUser: !isManual && items.some((it, i) => it.kcal !== aiItems[i]?.kcal),
       });
       onDone();
     } catch (err) {

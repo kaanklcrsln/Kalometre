@@ -7,6 +7,10 @@ rules_version = '2';
 //  - createdAt sunucu zamanıdır ve sonradan değiştirilemez.
 //  - Günlük AI sayacı yalnızca 1'er artabilir, azaltılamaz, gün dokümanı silinemez.
 //  - Plan kilitliyken hedef ve profil (isim hariç) değiştirilemez.
+//  - Kalo+ üyeliği (entitlements): kullanıcı yalnızca okur; sunucu (Google Play) ya da admin yazar.
+//  - Admin = Firebase Auth özel yetkisi (custom claim) admin: true; yalnızca Admin SDK verebilir.
+//  - Kilit açma istekleri (unlockRequests): kullanıcı ister, yalnızca admin onaylar/reddeder.
+//  - Şikayet/öneri notları (notes): kullanıcı günde en fazla 1 not yazar, değiştiremez; yalnızca admin okur/siler.
 // Testler: tests/rules/firestore.rules.test.ts  (npm run test:rules)
 
 service cloud.firestore {
@@ -16,6 +20,16 @@ service cloud.firestore {
 
     function isOwner(uid) {
       return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Özel yetki token'a Admin SDK ile konur; istemci bunu değiştiremez.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
+    // Giriş yapan hesabın kullanıcı adı (sentetik e-postanın @ öncesi).
+    function isOwnUsername(username) {
+      return username is string && request.auth.token.email == username + '@users.kalometre.firebaseapp.com';
     }
 
     function isNum(v, min, max) {
@@ -121,6 +135,95 @@ service cloud.firestore {
 
     function isLocked() {
       return request.time < lockEnds(resource.data.goal.lockedUntil);
+    }
+
+    // ---------- entitlements/{uid}: Kalo+ üyeliği ----------
+    // Kullanıcı yalnızca kendi üyeliğini okur, asla yazamaz.
+    // Google Play satın alımını Cloud Function (Admin SDK, kuralları atlar) yazar.
+    // Admin, onay isteğini kabul edince satın alımsız üyelik (source: "admin") verebilir/geri alabilir.
+    function validAdminGrant(d) {
+      return d.keys().hasOnly(['plan', 'status', 'expiresAtMs', 'source', 'grantedBy', 'grantedAt'])
+        && d.keys().hasAll(['plan', 'status', 'expiresAtMs', 'source', 'grantedBy', 'grantedAt'])
+        && d.plan == 'kalo_plus'
+        && d.status in ['active', 'canceled']
+        && d.source == 'admin'
+        && d.grantedBy == request.auth.uid
+        && d.grantedAt == request.time
+        // En fazla ~1 yıl ileriye verilebilir (yanlışlıkla süresiz üyelik olmasın).
+        && d.expiresAtMs is int
+        && d.expiresAtMs <= request.time.toMillis() + 400 * 86400000;
+    }
+
+    match /entitlements/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create, update: if isAdmin() && validAdminGrant(data());
+      allow delete: if isAdmin();
+    }
+
+    // ---------- notes/{noteId}: şikayet ve öneri ----------
+    // Kimlik = "<uid>_<UTC gün numarası>". Kural yalnızca BUGÜNÜN kimliğiyle oluşturmaya izin verir ve
+    // güncellemeyi yasaklar: aynı gün ikinci not yazılamaz (günde 1 sınırı sunucuda zorunlu).
+    function todayNoteId() {
+      return request.auth.uid + '_' + string(int(request.time.toMillis() / 86400000));
+    }
+
+    match /notes/{noteId} {
+      // Kullanıcı yalnızca kendi notlarını (kimlik uid ile başlar) okur; doküman yoksa da çalışır.
+      allow read: if isAdmin() || (request.auth != null && noteId.split('_')[0] == request.auth.uid);
+
+      allow create: if request.auth != null
+        && noteId == todayNoteId()
+        && data().keys().hasOnly(['uid', 'username', 'name', 'type', 'text', 'createdAt'])
+        && data().keys().hasAll(['uid', 'username', 'name', 'type', 'text', 'createdAt'])
+        && data().uid == request.auth.uid
+        && isOwnUsername(data().username)
+        && isStr(data().name, 1, 24)
+        && data().type in ['complaint', 'suggestion']
+        && isStr(data().text, 3, 1000)
+        && data().createdAt == request.time;
+
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ---------- unlockRequests/{uid}: satın alımsız Kalo+ için admin onayı ----------
+    function validRequestShape(d) {
+      return d.keys().hasOnly(['username', 'name', 'status', 'createdAt', 'decidedAt', 'decidedBy'])
+        && d.keys().hasAll(['username', 'name', 'status', 'createdAt'])
+        && isStr(d.name, 1, 24);
+    }
+
+    match /unlockRequests/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+
+      // Kullanıcı yalnızca kendi adına, "bekliyor" durumunda istek açar.
+      allow create: if isOwner(uid)
+        && validRequestShape(data())
+        && isOwnUsername(data().username)
+        && data().status == 'pending'
+        && data().createdAt == request.time
+        && !('decidedAt' in data()) && !('decidedBy' in data());
+
+      allow update: if validRequestShape(data())
+        && data().username == resource.data.username
+        && (
+          // Kullanıcı: sonuçlanmış (onay/red) isteğini yeniden "bekliyor"a alabilir; kararı değiştiremez.
+          (isOwner(uid)
+            && resource.data.status != 'pending'
+            && data().status == 'pending'
+            && data().createdAt == request.time
+            && onlyChanged(['status', 'createdAt', 'name']))
+          ||
+          // Admin: bekleyen isteği onaylar ya da reddeder.
+          (isAdmin()
+            && resource.data.status == 'pending'
+            && data().status in ['approved', 'rejected']
+            && data().decidedBy == request.auth.uid
+            && data().decidedAt == request.time
+            && onlyChanged(['status', 'decidedAt', 'decidedBy']))
+        );
+
+      allow delete: if isAdmin();
     }
 
     match /users/{uid} {

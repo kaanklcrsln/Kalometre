@@ -78,7 +78,8 @@ async function seedUser(uid: string, goalOver: Record<string, unknown> = {}) {
 
 beforeAll(async () => {
   env = await initializeTestEnvironment({
-    projectId: "demo-kalometre",
+    // Geliştirme verisiyle (demo-kalometre) karışmasın: testler başta veritabanını temizler.
+    projectId: "demo-kalometre-rules",
     firestore: { rules: readFileSync(process.env.RULES_FILE ?? "firestore.rules", "utf8"), host: "127.0.0.1", port: 8080 },
   });
 });
@@ -332,5 +333,206 @@ describe("entries", () => {
     await assertFails(getDoc(doc(as("ali"), `${col}/e1`)));
     await assertFails(setDoc(doc(as("ali"), `${col}/e2`), entry()));
     await assertFails(deleteDoc(doc(as("ali"), `${col}/e1`)));
+  });
+});
+
+describe("entitlements (Kalo+ üyeliği)", () => {
+  const active = { plan: "kalo_plus", status: "active", expiresAtMs: Date.now() + 86_400_000, source: "google_play" };
+
+  it("kullanıcı kendi üyeliğini okur", async () => {
+    await seed("entitlements/kaan", active);
+    await assertSucceeds(getDoc(doc(as("kaan"), "entitlements/kaan")));
+  });
+
+  it("başkasının üyeliği okunamaz, girişsiz okunamaz", async () => {
+    await seed("entitlements/kaan", active);
+    await assertFails(getDoc(doc(as("ali"), "entitlements/kaan")));
+    await assertFails(getDoc(doc(anon(), "entitlements/kaan")));
+  });
+
+  it("kullanıcı kendine üyelik veremez, uzatamaz, silemez", async () => {
+    await assertFails(setDoc(doc(as("kaan"), "entitlements/kaan"), active));
+    await seed("entitlements/kaan", { ...active, expiresAtMs: Date.now() - 1 });
+    await assertFails(updateDoc(doc(as("kaan"), "entitlements/kaan"), { expiresAtMs: Date.now() + 999_999_999 }));
+    await assertFails(deleteDoc(doc(as("kaan"), "entitlements/kaan")));
+  });
+
+  it("üyelik kullanıcı dokümanına da gizlice eklenemez", async () => {
+    await seedUser("kaan");
+    await assertFails(updateDoc(doc(as("kaan"), "users/kaan"), { kaloPlus: true }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin onayı ile Kalo+
+
+/** Admin özel yetkisine (custom claim) sahip kullanıcı. */
+const asAdmin = (uid = "boss") =>
+  env.authenticatedContext(uid, { email: `${uid}@${EMAIL_DOMAIN}`, admin: true }).firestore();
+
+const request = (over: Record<string, unknown> = {}) => ({
+  username: "kaan",
+  name: "Kaan",
+  status: "pending",
+  createdAt: serverTimestamp(),
+  ...over,
+});
+
+const grant = (over: Record<string, unknown> = {}) => ({
+  plan: "kalo_plus",
+  status: "active",
+  expiresAtMs: Date.now() + 30 * 86_400_000,
+  source: "admin",
+  grantedBy: "boss",
+  grantedAt: serverTimestamp(),
+  ...over,
+});
+
+describe("unlockRequests (onay isteği)", () => {
+  it("kullanıcı kendi adına bekleyen istek açar ve okur", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertSucceeds(getDoc(doc(as("kaan"), "unlockRequests/kaan")));
+  });
+
+  it("kullanıcı isteğini onaylanmış olarak açamaz", async () => {
+    await assertFails(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request({ status: "approved" })));
+  });
+
+  it("başkasının adına ya da başka kullanıcı adıyla istek açılamaz", async () => {
+    await assertFails(setDoc(doc(as("ali"), "unlockRequests/kaan"), request()));
+    await assertFails(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request({ username: "ali" })));
+  });
+
+  it("kullanıcı kendi isteğini onaylayamaz", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertFails(
+      updateDoc(doc(as("kaan"), "unlockRequests/kaan"), { status: "approved", decidedBy: "kaan", decidedAt: serverTimestamp() }),
+    );
+  });
+
+  it("başkaları istekleri okuyamaz ve listeleyemez; admin listeler", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertFails(getDoc(doc(as("ali"), "unlockRequests/kaan")));
+    await assertFails(getDocs(collection(as("ali"), "unlockRequests")));
+    await assertSucceeds(getDocs(collection(asAdmin(), "unlockRequests")));
+  });
+
+  it("admin bekleyen isteği onaylar ya da reddeder", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertSucceeds(
+      updateDoc(doc(asAdmin(), "unlockRequests/kaan"), { status: "approved", decidedBy: "boss", decidedAt: serverTimestamp() }),
+    );
+  });
+
+  it("admin kararı başka admin adına yazamaz, ismi değiştiremez", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertFails(
+      updateDoc(doc(asAdmin(), "unlockRequests/kaan"), { status: "approved", decidedBy: "baskasi", decidedAt: serverTimestamp() }),
+    );
+    await assertFails(
+      updateDoc(doc(asAdmin(), "unlockRequests/kaan"), { status: "approved", decidedBy: "boss", decidedAt: serverTimestamp(), name: "X" }),
+    );
+  });
+
+  it("reddedilen isteği kullanıcı yeniden açabilir ama kararı silemez", async () => {
+    await seed("unlockRequests/kaan", { ...request(), createdAt: Timestamp.now(), status: "rejected", decidedBy: "boss", decidedAt: Timestamp.now() });
+    await assertSucceeds(updateDoc(doc(as("kaan"), "unlockRequests/kaan"), { status: "pending", createdAt: serverTimestamp() }));
+  });
+
+  it("admin olmayan kimse karar veremez", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), "unlockRequests/kaan"), request()));
+    await assertFails(
+      updateDoc(doc(as("ali"), "unlockRequests/kaan"), { status: "approved", decidedBy: "ali", decidedAt: serverTimestamp() }),
+    );
+  });
+});
+
+describe("entitlements: admin ile satın alımsız üyelik", () => {
+  it("admin geçerli üyelik verir ve geri alır", async () => {
+    await assertSucceeds(setDoc(doc(asAdmin(), "entitlements/kaan"), grant()));
+    await assertSucceeds(getDoc(doc(asAdmin(), "entitlements/kaan")));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), "entitlements/kaan")));
+  });
+
+  it("admin bile geçersiz üyelik yazamaz (fazla alan, ~1 yıldan uzun süre, başkası adına)", async () => {
+    await assertFails(setDoc(doc(asAdmin(), "entitlements/kaan"), grant({ extra: true })));
+    await assertFails(setDoc(doc(asAdmin(), "entitlements/kaan"), grant({ expiresAtMs: Date.now() + 1000 * 86_400_000 })));
+    await assertFails(setDoc(doc(asAdmin(), "entitlements/kaan"), grant({ grantedBy: "baskasi" })));
+    await assertFails(setDoc(doc(asAdmin(), "entitlements/kaan"), grant({ source: "google_play" })));
+  });
+
+  it("admin yetkisi olmayan kullanıcı kendine admin kaynaklı üyelik yazamaz", async () => {
+    await assertFails(setDoc(doc(as("kaan"), "entitlements/kaan"), grant({ grantedBy: "kaan" })));
+  });
+
+  it("admin yetkisi token'da false/eksikse admin sayılmaz", async () => {
+    const fake = env.authenticatedContext("kaan", { email: `kaan@${EMAIL_DOMAIN}`, admin: false }).firestore();
+    await assertFails(setDoc(doc(fake, "entitlements/kaan"), grant({ grantedBy: "kaan" })));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Şikayet ve öneri notları
+
+const todayNoteId = (uid: string) => `${uid}_${Math.floor(Date.now() / 86_400_000)}`;
+const note = (over: Record<string, unknown> = {}) => ({
+  uid: "kaan",
+  username: "kaan",
+  name: "Kaan",
+  type: "suggestion",
+  text: "Karanlık tema harika olmuş.",
+  createdAt: serverTimestamp(),
+  ...over,
+});
+
+describe("notes (şikayet ve öneri)", () => {
+  it("kullanıcı bugünün notunu yazar ve okur", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note()));
+    await assertSucceeds(getDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`)));
+  });
+
+  it("aynı gün ikinci not yazılamaz (üzerine yazma dahil)", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note()));
+    await assertFails(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note({ text: "İkinci not deneme" })));
+    await assertFails(updateDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), { text: "değiştirdim" }));
+  });
+
+  it("başka gün kimliğiyle ya da rastgele kimlikle yazılamaz (sınır atlatılamaz)", async () => {
+    const day = Math.floor(Date.now() / 86_400_000);
+    await assertFails(setDoc(doc(as("kaan"), `notes/kaan_${day + 1}`), note()));
+    await assertFails(setDoc(doc(as("kaan"), `notes/kaan_${day - 1}`), note()));
+    await assertFails(setDoc(doc(as("kaan"), "notes/rastgele"), note()));
+  });
+
+  it("başkası adına yazılamaz", async () => {
+    await assertFails(setDoc(doc(as("ali"), `notes/${todayNoteId("kaan")}`), note()));
+    await assertFails(setDoc(doc(as("ali"), `notes/${todayNoteId("ali")}`), note({ username: "kaan" })));
+    await assertFails(setDoc(doc(as("ali"), `notes/${todayNoteId("ali")}`), note({ uid: "kaan", username: "ali" })));
+  });
+
+  it("geçersiz içerik reddedilir", async () => {
+    const id = `notes/${todayNoteId("kaan")}`;
+    await assertFails(setDoc(doc(as("kaan"), id), note({ text: "x" })));
+    await assertFails(setDoc(doc(as("kaan"), id), note({ text: "x".repeat(1001) })));
+    await assertFails(setDoc(doc(as("kaan"), id), note({ type: "spam" })));
+    await assertFails(setDoc(doc(as("kaan"), id), note({ extra: 1 })));
+    await assertFails(setDoc(doc(as("kaan"), id), note({ createdAt: Timestamp.now() })));
+  });
+
+  it("başkasının notu okunamaz; notlar listelenemez; kullanıcı silemez", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note()));
+    await assertFails(getDoc(doc(as("ali"), `notes/${todayNoteId("kaan")}`)));
+    await assertFails(getDocs(collection(as("kaan"), "notes")));
+    await assertFails(deleteDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`)));
+  });
+
+  it("kullanıcı henüz yazmadığı bugünkü notunu sorgulayabilir (yoksa boş döner)", async () => {
+    await assertSucceeds(getDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`)));
+  });
+
+  it("admin tüm notları listeler ve silebilir", async () => {
+    await assertSucceeds(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note()));
+    await assertSucceeds(getDocs(collection(asAdmin(), "notes")));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), `notes/${todayNoteId("kaan")}`)));
   });
 });

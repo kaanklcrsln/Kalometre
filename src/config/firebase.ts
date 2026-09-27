@@ -16,19 +16,27 @@ export const firebaseConfig = {
 
 export const app = initializeApp(firebaseConfig);
 
-// App Check, diğer servislerden önce başlatılmalı.
+export const usingEmulators = env.VITE_USE_EMULATORS === "true";
+
+// App Check, diğer servislerden önce başlatılmalı. Emülatörler App Check istemez; emülatör modunda
+// (sahte proje kimliği) gerçek App Check sunucusu token vermeyeceği için hiç başlatılmaz.
 export let appCheck: AppCheck | null = null;
 const siteKey = env.VITE_RECAPTCHA_ENTERPRISE_SITE_KEY;
-if (env.DEV && env.VITE_APPCHECK_DEBUG === "true") {
-  // Konsola bir debug token yazdırır; Firebase Console > App Check > Debug token'lara eklenmeli.
-  (globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean }).FIREBASE_APPCHECK_DEBUG_TOKEN = true;
+// Yalnızca geliştirmede (npm run dev): localhost'ta reCAPTCHA yerine App Check debug token'ı kullanılır.
+// VITE_APPCHECK_DEBUG_TOKEN verilirse o sabit token kullanılır (Firebase Console > App Check > Debug token'lara
+// bir kez eklenir); verilmezse SDK tarayıcı başına rastgele bir token üretip konsola yazar.
+// Debug ayarları .env.development.local'dadır ve import.meta.env'e doğrudan erişilir: üretimde bu blok
+// derlemeden tamamen silinir, token pakete girmez.
+if (import.meta.env.DEV && import.meta.env.VITE_APPCHECK_DEBUG === "true") {
+  (globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }).FIREBASE_APPCHECK_DEBUG_TOKEN =
+    import.meta.env.VITE_APPCHECK_DEBUG_TOKEN || true;
 }
-if (siteKey) {
+if (siteKey && !usingEmulators) {
   appCheck = initializeAppCheck(app, {
     provider: new ReCaptchaEnterpriseProvider(siteKey),
     isTokenAutoRefreshEnabled: true,
   });
-} else {
+} else if (!usingEmulators) {
   console.warn("[Kalometre] VITE_RECAPTCHA_ENTERPRISE_SITE_KEY yok; App Check kapalı. AI çağrıları App Check zorunluysa reddedilir.");
 }
 
@@ -38,7 +46,6 @@ export const firestore = initializeFirestore(app, {
   ignoreUndefinedProperties: true,
 });
 
-export const usingEmulators = env.VITE_USE_EMULATORS === "true";
 if (usingEmulators) {
   connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
   connectFirestoreEmulator(firestore, "127.0.0.1", 8080);

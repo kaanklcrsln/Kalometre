@@ -46,7 +46,7 @@ Proje `kalometre` zaten açık. Yeni bir proje açacaksan:
 - Günlük AI sayacı yalnızca 1'er artar, azaltılamaz, 50'yi geçemez; gün dokümanı silinemez.
 - Kullanıcı dokümanı istemciden silinemez (hesap silme ileride sunucu tarafında yapılmalı).
 
-Kural testleri (32 test, emülatörde, Java 21 gerekir): `npm run test:rules`
+Kural testleri (57 test, emülatörde, Java 21 gerekir): `npm run test:rules`
 
 Gerçek projeye yüklemek için: `npx firebase login` → `npm run deploy:rules`
 
@@ -103,15 +103,57 @@ npm run deploy:rules                           # Firestore kuralları
 - **Kilit:** günlük kalori ve öğün dağılımı hedef tarihine kadar (koruma planında 30 gün) değiştirilemez; yeni kilo girmek hedefi değiştirmez. Kilit bitince Ayarlar → "Yeni plan oluştur".
 - **Sohbet:** Gemini ile sohbet; son 10 mesaj gönderilir, geçmiş yalnızca bellekte tutulur. Her mesaj günlük 50 AI hakkından düşer.
 
+## Kalo+ (ücretli üyelik) — altyapı hazır, ödeme henüz bağlı değil
+
+- **KaloAI sohbeti** yalnızca Kalo+ üyelerine açık; diğerleri kilit ekranını görür (özellikler, fiyat, "Kilidi aç"). Plan tanımı: [src/config/plans.ts](src/config/plans.ts).
+- **Üyelik kaynağı:** `entitlements/{uid}` dokümanı `{ plan: "kalo_plus", status, expiresAtMs, source: "google_play" }`. Kullanıcı yalnızca **okur**; Firestore kuralları istemciden yazmayı tamamen kapatır. Geçerlilik: `status` "active" ya da "grace" ve `expiresAtMs` gelecekte ([src/lib/entitlement.ts](src/lib/entitlement.ts)). Doküman değişince kilit sayfa yenilenmeden açılır/kapanır.
+- **Ödeme katmanı:** [src/services/billing.ts](src/services/billing.ts). Şimdilik "yakında" mesajı dönen bir yer tutucu.
+
+### Admin onayıyla Kalo+ (Google Play bağlanana kadar)
+
+"Kilidi aç" → `unlockRequests/{uid}` dokümanına bekleyen istek yazılır. Admin, Ayarlar → **Onay istekleri** ekranından onaylarsa kullanıcıya 30 günlük Kalo+ (`source: "admin"`) verilir ve kilit anında açılır; reddederse kullanıcı yeniden isteyebilir. Admin = Firebase Auth özel yetkisi `admin: true`; Firestore kuralları yalnızca bu yetkiye sahip hesabın onaylamasına ve üyelik yazmasına izin verir.
+
+**Admin hesabı açmak:**
+
+1. Uygulamada normal şekilde üye ol ve onboarding'i bitir (ör. kullanıcı adı `kaan`).
+2. Firebase Console → Proje ayarları → **Hizmet hesapları** → **Yeni özel anahtar oluştur** → JSON'u indir. Bu dosya projenin tam yöneticisidir: **proje klasörüne koyma, git'e ekleme, kimseyle paylaşma** (ör. `C:\guvenli\` altına koy; `.gitignore` yine de `*adminsdk*.json` desenini engeller).
+3. PowerShell'de:
+   ```powershell
+   $env:GOOGLE_APPLICATION_CREDENTIALS="C:\guvenli\kalometre-firebase-adminsdk-xxxxx.json"
+   npm run admin -- kaan
+   ```
+4. Uygulamayı yenile; Ayarlar'da **Onay istekleri** görünür. Yetkiyi geri almak için: `npm run admin -- kaan --remove` (en geç 1 saat içinde tamamen düşer).
+5. Kuralların gerçek projede güncel olduğundan emin ol: `npm run deploy:rules`.
+
+Emülatörde: `npm run admin -- <kullanıcıadı> --emulator` (anahtar gerekmez).
+
+### Şikayet ve öneri notları
+
+Ayarlar → **Şikayet ve öneri**: kullanıcı günde en fazla 1 not (şikayet/öneri, 3–1000 karakter) gönderir; notlar `notes` koleksiyonuna yazılır ve admin panelinde en yeni 50 not listelenir (admin silebilir). Günde 1 sınırı Firestore kuralında zorunludur: not kimliği `<uid>_<UTC gün numarası>` olmak zorunda ve not güncellenemez; gün Türkiye saatiyle 03:00'te değişir. KaloAI, model/altyapı ya da sağlık dışı sorularda kullanıcıyı buraya yönlendirir.
+
+### Google Play'e bağlarken yapılacaklar
+
+1. Play Console'da `kalo_plus_monthly` aylık abonelik ürünü (200 TL).
+2. Capacitor Android sürümünde bir Google Play Billing eklentisiyle `BillingProvider` uygulaması (`getBillingProvider()` bunu döndürmeli).
+3. **Cloud Function:** satın alma token'ını Google Play Developer API ile doğrula, aboneliği onayla (acknowledge), Admin SDK ile `entitlements/{uid}` yaz. Yenileme/iptal için Real-time Developer Notifications (Pub/Sub) aynı dokümanı güncellesin.
+4. **Sunucu tarafı zorunluluk:** kilit şu an yalnızca arayüzde. Gemini çağrısı istemciden yapıldığı için üye olmayan biri konsoldan yine çağırabilir. Yayından önce KaloAI çağrıları üyeliği kontrol eden bir Cloud Function'ın arkasına alınmalı.
+
+**Emülatörde üye gibi test:** emülatör arayüzünde (http://127.0.0.1:4000/firestore) `entitlements/{kullanıcı uid}` dokümanını elle oluştur: `plan: "kalo_plus"`, `status: "active"`, `expiresAtMs`: gelecekte bir zaman (ms), `source: "google_play"`.
+
 ## Avatar
 
-- Tanım: kök dizindeki [avatar/unknown.avatar.json](avatar/unknown.avatar.json) (`@bible-strong/avatar-react`). Renkler kodda paletle sabitlenir: gövde Porcelain, gözler Coffee Bean ([src/avatar/definition.ts](src/avatar/definition.ts)). JSON'u yeniden dışa aktarırsan dosyanın üzerine yazman yeterli.
-- Hesap oluşturma boyunca (karşılama, onboarding, yeni plan) ekranın boş alanlarında gezer: içerik ölçülür, çakışmayan bir nokta seçilir ([src/avatar/placement.ts](src/avatar/placement.ts)). Adım değişince hemen, sonra 5–8 sn'de bir yer değiştirir; içerik üstüne gelirse kaçar. Yer yoksa küçülür (104 → 80 → 60 px).
-- Duygular = animasyon adları. Hangi ekranda hangi duygunun oynatılacağı [src/avatar/moods.ts](src/avatar/moods.ts) içinde tek yerde.
-  - Ekranın temel duygusu: `useAvatarMood("happy", "sahne-adı")`
+- Tanım: kök dizindeki [avatar/unknown.avatar.json](avatar/unknown.avatar.json) (`@bible-strong/avatar-react`, **AGPL-3.0**). Renkler kodda paletle sabitlenir: gövde Porcelain, gözler Coffee Bean; başarıda gövde Deep Teal ([src/avatar/definition.ts](src/avatar/definition.ts)). JSON'u yeniden dışa aktarırsan dosyanın üzerine yazman yeterli.
+- **Kalo sekmesi (KaloAI sohbeti):** alt bardaki sekmenin ikonu avatardır. Sohbet boşken avatar ekranın ortasında durur, yazarken yazı imlecine bakar; ilk mesaj gönderilince kaybolur (sohbet temizlenince ya da mesaj gönderilemezse geri gelir).
+- Ana sayfada selamlamanın ("Günaydın, Kaan") sağında görünür. Temel duygusu günün durumuna bağlıdır: kayıt yoksa `idle`, hedef içindeyse `happy`, hedef aşıldıysa `sad`.
+- **Tema düğmesi:** avatara tıklayınca (ya da klavyeyle Enter/Boşluk) açık/koyu tema değişir; seçim tarayıcıda saklanır. Açık temada avatar siyah gövde + beyaz göz, koyu temada beyaz gövde + siyah göz. Koyu temada zemin Coffee Bean, yazı Porcelain; yeşil/kırmızı yazılar okunurluk için porselenle açıltılır (kontrast 7:1 ve 4,8:1). Renk tokenları: `--ink` (yazı), `--paper` (zemin), `--positive`, `--negative` ([src/styles.css](src/styles.css), SVG için [src/config/theme.ts](src/config/theme.ts)).
+- **İmleç takibi:** fare hareketine ve tıklanan/dokunulan noktaya bakar. Tanıma kodla 45 bakış yönü (`gaze-…` ifadeleri) eklenir, imlecin açısına en yakını seçilir ([src/avatar/gaze.ts](src/avatar/gaze.ts)). İmleç 1,5 sn durursa ekranın duygusuna döner.
+- **Giriş tepkisi:** doğru girişten ya da üyelikten sonra ana sayfaya ilk gelişte yeşile dönüp kutlar.
+- Duygular = animasyon adları; eşlemeler [src/avatar/moods.ts](src/avatar/moods.ts) içinde. Öncelik: tepki > imleç takibi > ekranın duygusu.
+  - Ekranın temel duygusu: `useAvatarMood("happy")`
   - Tıklamaya tepki: `<button {...onTapMood("celebrate")}>`
   - Kod içinden tepki: `useAvatar().react("surprised")`
   - Otomatik: yazı yazarken `listening`, şifre yazarken `shy`, avatara dokununca `laughing`.
+- Windows/tarayıcıda "hareketi azalt" açıksa süzülme animasyonu durur (erişilebilirlik).
 - Avatar yüklenemezse ya da hata verirse gizlenir; uygulamayı etkilemez. Kodu tembel yüklenir, giriş yapmış kullanıcı indirmez.
 
 ## Mimari
@@ -134,3 +176,22 @@ Görünüm `components/`, `pages/` ve `styles.css`'te; mantık hook'larda.
 - Günlük AI istek sayacı `users/{uid}/days/{bugün}.aiRequests` alanında tutulur (istemci tarafı sınır: 50/gün). Kullanıcı kendi dokümanını yazabildiği için bu **kötüye kullanıma karşı gerçek bir koruma değildir**; asıl koruma App Check + AI Logic kotalarıdır.
 - `users/{uid}.goal`: `startWeightKg, startDate, targetWeightKg, paceKgPerMonth, targetDate, dailyCalories, mealCalories {breakfast,lunch,dinner} (kcal), lockedUntil`. `profile`: `username, name, sex, birthYear, heightCm, bodyFatPct?, sports [{sportId, daysPerWeek}]`.
 - Kayıt toplamı (`totalKcal`) her zaman kodda kalemlerden hesaplanır; Gemini'nin toplamı kullanılmaz. `aiKcal` Gemini kalemlerinin ilk toplamıdır (elle girişte 0).
+
+## Lisanslar ve gizlilik
+
+### Açık kaynak lisansları
+
+- **Avatar:** [`@bible-strong/avatar-react`](https://github.com/smontlouis/bible-strong-avatar-lab) — © Stéphane Montlouis-Calixte, **GNU AGPL-3.0**. Avatar tanımı (`avatar/unknown.avatar.json`) bu projenin araçlarıyla üretildi.
+- AGPL-3.0, uygulamayı ağ üzerinden kullanan herkese kaynak koduna erişim sunulmasını gerektirir. Bu yüzden kaynak kod herkese açık tutulur ve uygulamada Ayarlar → **Gizlilik ve açık kaynak** kartından bu depoya bağlantı verilir: https://github.com/kaanklcrsln/Kalometre
+- Font: Rubik (SIL Open Font License, `font/OFL.txt`).
+
+### Gizlilik (test sürümü)
+
+Kullanıcılar kilo, boy, yaş ve yemek bilgisi girer; bunlar KVKK kapsamında **özel nitelikli kişisel veri** (sağlık verisi) sayılır.
+
+- Veriler yalnızca kalori planını hesaplamak için kullanılır ve Google Firebase'de, Firestore **eur3 (Avrupa)** bölgesinde saklanır; üçüncü kişilerle paylaşılmaz.
+- Yemek ve sohbet metinleri analiz için Firebase AI Logic üzerinden Google Gemini'ye gönderilir.
+- Kullanıcıya aydınlatma metni üye olurken kayıt ekranında ve Ayarlar → **Gizlilik ve açık kaynak** kartında gösterilir (metin: [src/config/legal.ts](src/config/legal.ts)).
+- Silme talebi: kullanıcı Ayarlar → Şikayet ve Öneri'den ister; admin Firebase Console'dan `users/{uid}` (alt koleksiyonlarıyla), `entitlements/{uid}`, `unlockRequests/{uid}`, kullanıcının `notes` kayıtları ve Authentication'daki hesabı siler.
+
+> Bu bölüm hukuki danışmanlık değildir; herkese açık yayından önce KVKK aydınlatma/açık rıza metinleri bir uzmana gösterilmelidir.

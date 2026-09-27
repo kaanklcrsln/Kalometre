@@ -7,18 +7,13 @@ import { EntryEditor } from "./EntryEditor";
 
 interface Props {
   meals: MealSummary[];
-  name: string;
   onUpdate: (id: string, patch: Partial<NewEntry>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
-export function EntryList({ meals, name, onUpdate, onDelete }: Props) {
+export function EntryList({ meals, onUpdate, onDelete }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
-  const isEmpty = meals.every((m) => m.entries.length === 0);
-
-  if (isEmpty) {
-    return <p className="muted center" style={{ padding: "16px 0" }}>Henüz bir şey eklemedin, {name}. Ortadaki + ile başla.</p>;
-  }
+  if (meals.every((m) => m.entries.length === 0)) return null;
 
   return (
     <section className="stack-lg">

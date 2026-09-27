@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import { useAvatarMood } from "../avatar/AvatarProvider";
-import { ONBOARDING_MOODS } from "../avatar/moods";
 
 interface Props {
   label: string;
@@ -15,8 +13,6 @@ const FADE_MS = 600;
 /** Kategori kırmızı belirir → söner → yeşil mesaj gelir. */
 export function BmiReveal({ label, bmi, name, onContinue }: Props) {
   const [phase, setPhase] = useState<"word" | "leaving" | "message">("word");
-  // Kırmızı kelimede irkilir, yeşil mesajda sevinir.
-  useAvatarMood(phase === "message" ? ONBOARDING_MOODS.bmiMessage : ONBOARDING_MOODS.bmiWord, `bmi-${phase === "message" ? "message" : "word"}`);
 
   useEffect(() => {
     const t1 = setTimeout(() => setPhase("leaving"), WORD_MS);

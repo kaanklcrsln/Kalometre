@@ -1,4 +1,3 @@
-import { onTapMood } from "../avatar/moods";
 import { MEAL_LABELS, MEALS, mealTotal } from "../lib/calculations";
 import type { Meal, MealCalories } from "../types";
 
@@ -15,11 +14,11 @@ export function MealSplitEditor({ meals, dailyCalories, onChange }: Props) {
       {MEALS.map((meal) => (
         <div key={meal} className="meal-row">
           <span>{MEAL_LABELS[meal]}</span>
-          <button type="button" className="btn-icon" {...onTapMood("shy")} onClick={() => onChange(meal, -1)} aria-label={`${MEAL_LABELS[meal]} azalt`}>
+          <button type="button" className="btn-icon" onClick={() => onChange(meal, -1)} aria-label={`${MEAL_LABELS[meal]} azalt`}>
             −
           </button>
           <strong>{meals[meal]}</strong>
-          <button type="button" className="btn-icon" {...onTapMood("playful")} onClick={() => onChange(meal, 1)} aria-label={`${MEAL_LABELS[meal]} artır`}>
+          <button type="button" className="btn-icon" onClick={() => onChange(meal, 1)} aria-label={`${MEAL_LABELS[meal]} artır`}>
             +
           </button>
         </div>

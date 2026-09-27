@@ -379,3 +379,40 @@ export const MAX_ITEM_NAME = 80;
 export function clampItemKcal(kcal: number): number {
   return Number.isFinite(kcal) ? Math.min(Math.max(Math.round(kcal), 0), MAX_ITEM_KCAL) : 0;
 }
+
+// ---------- Su bardakları ----------
+
+export const WATER_GLASS_ML = 200;
+/** Bardaklar 5'erli sıralar hâlinde eklenip çıkarılır. */
+export const WATER_ROW = 5;
+/** Varsayılan: tek sıra. */
+export const WATER_GLASS_COUNT = WATER_ROW;
+/** En fazla 10 sıra (50 bardak = 10 L); Firestore kuralı günlük 20 L'ye izin verir. */
+export const WATER_MAX_GLASSES = 50;
+
+/**
+ * Gösterilecek bardak sayısı: kullanıcının istediği sıra sayısı, ama toplam su her zaman görünecek kadar
+ * (5'in katına yuvarlanmış), en az 1 en fazla 10 sıra.
+ */
+export function waterGlassCount(waterMl: number, requestedGlasses: number): number {
+  const needed = Math.ceil(Math.max(0, waterMl) / WATER_GLASS_ML / WATER_ROW) * WATER_ROW;
+  return Math.min(Math.max(requestedGlasses, needed, WATER_ROW), WATER_MAX_GLASSES);
+}
+
+/** Son sırayı kaldırınca: yeni bardak sayısı ve o sıradaki suyun düşülmesi için gereken değişim (ml, ≤ 0). */
+export function removeWaterRow(waterMl: number, glassCount: number): { glasses: number; deltaMl: number } {
+  const glasses = Math.max(glassCount - WATER_ROW, WATER_ROW);
+  const capacity = glasses * WATER_GLASS_ML;
+  return { glasses, deltaMl: -Math.max(0, waterMl - capacity) };
+}
+
+/** Her bardağın doluluk oranı (0–1). Bardaklar sırayla dolar; artan miktar sonraki bardağı kısmen doldurur. */
+export function waterGlassFills(waterMl: number, count = WATER_GLASS_COUNT, glassMl = WATER_GLASS_ML): number[] {
+  const total = Math.max(0, waterMl);
+  return Array.from({ length: count }, (_, i) => Math.min(Math.max((total - i * glassMl) / glassMl, 0), 1));
+}
+
+/** Bardağa dokununca: boş bardak +200 ml, (kısmen) dolu bardak −200 ml. */
+export function waterDeltaForGlass(fill: number, glassMl = WATER_GLASS_ML): number {
+  return fill > 0 ? -glassMl : glassMl;
+}

@@ -1,4 +1,3 @@
-import { onTapMood } from "../avatar/moods";
 import { SPORTS } from "../config/sports";
 import type { SportRow } from "../hooks/useOnboarding";
 import type { SportEntry } from "../types";
@@ -49,12 +48,12 @@ export function SportsPicker({ rows, onAdd, onRemove, onChange }: Props) {
               </option>
             ))}
           </select>
-          <button type="button" className="btn-icon" {...onTapMood("sad")} onClick={() => onRemove(row.key)} aria-label="Sporu kaldır">
+          <button type="button" className="btn-icon" onClick={() => onRemove(row.key)} aria-label="Sporu kaldır">
             ×
           </button>
         </div>
       ))}
-      <button type="button" className="btn btn-ghost" {...onTapMood("celebrate")} onClick={onAdd}>
+      <button type="button" className="btn btn-ghost" onClick={onAdd}>
         + Spor ekle
       </button>
       {rows.length === 0 && <p className="muted small">Spor yapmıyorsan boş bırakıp devam edebilirsin.</p>}

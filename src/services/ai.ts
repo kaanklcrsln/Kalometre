@@ -15,6 +15,7 @@ import {
   buildChatInstruction,
   buildSystemInstruction,
   CHAT_HISTORY_LIMIT,
+  CHAT_MAX_OUTPUT_TOKENS,
   type ChatContext,
   DAILY_AI_REQUEST_LIMIT,
   GEMINI_MODEL,
@@ -151,9 +152,11 @@ export async function sendChatMessage(
     const model = getGenerativeModel(ai, {
       model: GEMINI_MODEL,
       systemInstruction: buildChatInstruction(context),
-      ...(GEMINI_THINKING_LEVEL
-        ? { generationConfig: { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } } as GenerationConfig }
-        : {}),
+      generationConfig: {
+        // Kısa yanıt talimatına ek sert sınır: kontrolden çıkan uzun yanıt maliyet üretmesin.
+        maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+        ...(GEMINI_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } } : {}),
+      } as GenerationConfig,
     });
     // Gemini, sohbetin kullanıcı mesajıyla başlamasını bekler.
     const recent = history.slice(-CHAT_HISTORY_LIMIT);

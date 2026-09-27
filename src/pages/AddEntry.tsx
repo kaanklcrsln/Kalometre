@@ -1,18 +1,20 @@
 import { useNavigate, useSearchParams } from "react-router";
+import { DrinkIcon, FoodIcon, SnackIcon, WaterIcon } from "../components/Icons";
 import { ManualEntryForm } from "../components/ManualEntryForm";
 import { MealButtons } from "../components/MealButtons";
 import { ResultCard } from "../components/ResultCard";
 import { WaterForm } from "../components/WaterForm";
+import type { ComponentType } from "react";
 import { CATEGORY_LABELS, MAX_INPUT_CHARS } from "../config/ai";
 import { useAddEntry, type AddCategory } from "../hooks/useAddEntry";
 import { useSession } from "../hooks/session";
 import { formatDateTr, todayKey } from "../lib/dates";
 
-const CATEGORY_BUTTONS: { value: AddCategory; label: string }[] = [
-  { value: "food", label: CATEGORY_LABELS.food },
-  { value: "drink", label: CATEGORY_LABELS.drink },
-  { value: "water", label: "Su" },
-  { value: "snack", label: CATEGORY_LABELS.snack },
+const CATEGORY_BUTTONS: { value: AddCategory; label: string; Icon: ComponentType }[] = [
+  { value: "food", label: CATEGORY_LABELS.food, Icon: FoodIcon },
+  { value: "drink", label: CATEGORY_LABELS.drink, Icon: DrinkIcon },
+  { value: "water", label: "Su", Icon: WaterIcon },
+  { value: "snack", label: CATEGORY_LABELS.snack, Icon: SnackIcon },
 ];
 
 export default function AddEntry() {
@@ -42,7 +44,8 @@ export default function AddEntry() {
           <div className="category-grid">
             {CATEGORY_BUTTONS.map((c) => (
               <button key={c.value} type="button" className="choice" onClick={() => a.chooseCategory(c.value)}>
-                {c.label}
+                <c.Icon />
+                <span>{c.label}</span>
               </button>
             ))}
           </div>
@@ -71,18 +74,25 @@ export default function AddEntry() {
             value={a.text}
             maxLength={MAX_INPUT_CHARS}
             onChange={(e) => a.setText(e.target.value)}
-            placeholder="Ne yediğini ve ne kadar yediğini tarif et…"
+            placeholder={
+              a.category === "drink" ? "Ne içtiğini ve ne kadar içtiğini tarif et…" : "Ne yediğini ve ne kadar yediğini tarif et…"
+            }
             disabled={a.loading}
             autoFocus
           />
           <button type="submit" className="btn btn-block" disabled={a.loading || !a.text.trim()}>
             {a.loading ? "Hesaplanıyor…" : "Gönder"}
           </button>
-          {a.loading && (
+          {a.loading ? (
             <div className="row center" style={{ justifyContent: "center" }} aria-live="polite">
               <div className="spinner" />
               <span className="muted">Kaloriler hesaplanıyor…</span>
             </div>
+          ) : (
+            // Kalorisi biliniyorsa yapay zekâ çalıştırılmadan doğrudan girilir.
+            <button type="button" className="btn btn-ghost btn-block" onClick={a.openManual}>
+              Kalorisini biliyorum
+            </button>
           )}
         </form>
       )}
@@ -101,7 +111,12 @@ export default function AddEntry() {
       {a.step === "manual" && (
         <div className="stack-lg fade-in">
           <h2>Kaloriyi elle gir</h2>
-          <ManualEntryForm defaultName={a.text.trim()} onSubmit={a.saveManual} onCancel={a.back} />
+          <ManualEntryForm
+            defaultName={a.text.trim()}
+            nameLabel={a.category === "drink" ? "Ne içtin?" : "Ne yedin?"}
+            onSubmit={a.saveManual}
+            onCancel={a.back}
+          />
         </div>
       )}
 

@@ -1,16 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { AvatarMood } from "./definition";
-import { INPUT_MOODS, REACTION_MS, TYPING_MS } from "./moods";
+import { AUTH_MOODS, CELEBRATE_MS, INPUT_MOODS, REACTION_MS, TYPING_MS } from "./moods";
+
+export type AvatarTint = "default" | "positive";
 
 interface AvatarState {
   /** Şu an gösterilen duygu: tepki > ekranın temel duygusu. */
   mood: AvatarMood;
-  /** Ekran/adım kimliği; değişince gezen avatar yeni bir boş yere gider. */
-  scene: string;
+  /** Kısa süreli bir tepki oynuyor mu? (Oynuyorsa imleç takibi beklemeye alınır.) */
+  reacting: boolean;
+  /** Gövde rengi: varsayılan porselen, başarıda yeşil. */
+  tint: AvatarTint;
   setBaseMood: (mood: AvatarMood) => void;
-  setScene: (scene: string) => void;
   /** Kısa süreli tepki; süre bitince temel duyguya döner. */
   react: (mood: AvatarMood, ms?: number) => void;
+  /** Yeşile dön ve kutla; süre bitince porselene dön. */
+  celebrate: (ms?: number) => void;
+  /** Avatar bir sonraki görünüşünde kutlasın (ör. girişten sonra ana sayfaya ilk geliş). */
+  celebrateOnArrival: () => void;
+  /** Bekleyen kutlama varsa true döner ve işareti temizler. */
+  consumeArrival: () => boolean;
 }
 
 const AvatarContext = createContext<AvatarState | null>(null);
@@ -24,13 +33,34 @@ const AvatarContext = createContext<AvatarState | null>(null);
 export function AvatarProvider({ children, initialMood = "idle" }: { children: ReactNode; initialMood?: AvatarMood }) {
   const [base, setBase] = useState<AvatarMood>(initialMood);
   const [reaction, setReaction] = useState<AvatarMood | null>(null);
-  const [scene, setScene] = useState("");
+  const [tint, setTint] = useState<AvatarTint>("default");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const celebrateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arrival = useRef(false);
 
   const react = useCallback((mood: AvatarMood, ms = REACTION_MS) => {
     setReaction(mood);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setReaction(null), ms);
+  }, []);
+
+  const celebrate = useCallback(
+    (ms = CELEBRATE_MS) => {
+      setTint("positive");
+      react(AUTH_MOODS.success, ms);
+      if (celebrateTimer.current) clearTimeout(celebrateTimer.current);
+      celebrateTimer.current = setTimeout(() => setTint("default"), ms);
+    },
+    [react],
+  );
+
+  const celebrateOnArrival = useCallback(() => {
+    arrival.current = true;
+  }, []);
+  const consumeArrival = useCallback(() => {
+    const pending = arrival.current;
+    arrival.current = false;
+    return pending;
   }, []);
 
   useEffect(() => {
@@ -51,12 +81,22 @@ export function AvatarProvider({ children, initialMood = "idle" }: { children: R
       document.removeEventListener("click", onClick);
       document.removeEventListener("input", onInput);
       if (timer.current) clearTimeout(timer.current);
+      if (celebrateTimer.current) clearTimeout(celebrateTimer.current);
     };
   }, [react]);
 
   const value = useMemo<AvatarState>(
-    () => ({ mood: reaction ?? base, scene, setBaseMood: setBase, setScene, react }),
-    [reaction, base, scene, react],
+    () => ({
+      mood: reaction ?? base,
+      reacting: reaction !== null,
+      tint,
+      setBaseMood: setBase,
+      react,
+      celebrate,
+      celebrateOnArrival,
+      consumeArrival,
+    }),
+    [reaction, base, tint, react, celebrate, celebrateOnArrival, consumeArrival],
   );
   return <AvatarContext.Provider value={value}>{children}</AvatarContext.Provider>;
 }
@@ -68,15 +108,12 @@ export function useAvatar(): AvatarState {
 }
 
 /**
- * Ekranın temel duygusunu ve sahnesini bildirir; değerler değiştikçe güncellenir.
+ * Ekranın temel duygusunu bildirir; değer değiştikçe güncellenir.
  * mood null ise temel duyguya dokunulmaz (ör. alt bileşen kendi duygusunu yönetiyorsa).
  */
-export function useAvatarMood(mood: AvatarMood | null, scene?: string) {
-  const { setBaseMood, setScene } = useAvatar();
+export function useAvatarMood(mood: AvatarMood | null) {
+  const { setBaseMood } = useAvatar();
   useEffect(() => {
     if (mood) setBaseMood(mood);
   }, [mood, setBaseMood]);
-  useEffect(() => {
-    if (scene !== undefined) setScene(scene);
-  }, [scene, setScene]);
 }

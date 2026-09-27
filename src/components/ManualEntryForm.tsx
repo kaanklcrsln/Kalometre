@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { MAX_ITEM_KCAL, MAX_ITEM_NAME } from "../lib/calculations";
 
 interface Props {
   defaultName: string;
+  nameLabel: string;
   onSubmit: (name: string, kcal: number) => void;
   onCancel: () => void;
 }
 
-export function ManualEntryForm({ defaultName, onSubmit, onCancel }: Props) {
+export function ManualEntryForm({ defaultName, nameLabel, onSubmit, onCancel }: Props) {
   const [name, setName] = useState(defaultName);
   const [kcal, setKcal] = useState("");
 
@@ -19,13 +21,29 @@ export function ManualEntryForm({ defaultName, onSubmit, onCancel }: Props) {
       }}
     >
       <label className="field">
-        <span>Ne yedin?</span>
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+        <span>{nameLabel}</span>
+        <input
+          className="input"
+          placeholder="İsteğe bağlı"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={MAX_ITEM_NAME}
+        />
       </label>
       <label className="field">
         <span>Kalori</span>
         <div className="unit-input">
-          <input className="input" type="number" inputMode="numeric" min={1} value={kcal} onChange={(e) => setKcal(e.target.value)} required />
+          <input
+            className="input"
+            type="number"
+            inputMode="numeric"
+            min={1}
+            max={MAX_ITEM_KCAL}
+            value={kcal}
+            onChange={(e) => setKcal(e.target.value)}
+            required
+            autoFocus
+          />
           <em>kcal</em>
         </div>
       </label>

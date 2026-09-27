@@ -1,4 +1,5 @@
-import { alpha, COLORS } from "../config/theme";
+import { alpha } from "../config/theme";
+import { useTheme } from "../hooks/useTheme";
 
 interface Props {
   label: string;
@@ -9,6 +10,7 @@ interface Props {
 
 /** Yeşil: hedef içinde · kırmızı: hedef aşıldı. */
 export function ProgressRing({ label, consumed, target, size = 100 }: Props) {
+  const { colors } = useTheme();
   const stroke = 9;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -17,23 +19,23 @@ export function ProgressRing({ label, consumed, target, size = 100 }: Props) {
   return (
     <figure className="ring">
       <svg width={size} height={size} role="img" aria-label={`${label}: ${consumed} / ${target} kcal`}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={alpha(COLORS.coffee, 0.1)} strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={alpha(colors.ink, 0.1)} strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
           r={r}
           fill="none"
-          stroke={over ? COLORS.brick : COLORS.teal}
+          stroke={over ? colors.negative : colors.positive}
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={c}
           strokeDashoffset={c * (1 - ratio)}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
         />
-        <text x="50%" y="46%" textAnchor="middle" dominantBaseline="central" fontSize={18} fontWeight={700} fill={over ? COLORS.brick : COLORS.coffee}>
+        <text x="50%" y="46%" textAnchor="middle" dominantBaseline="central" fontSize={18} fontWeight={700} fill={over ? colors.negative : colors.ink}>
           {consumed}
         </text>
-        <text x="50%" y="64%" textAnchor="middle" dominantBaseline="central" fontSize={11} fill={alpha(COLORS.coffee, 0.6)}>
+        <text x="50%" y="64%" textAnchor="middle" dominantBaseline="central" fontSize={11} fill={alpha(colors.ink, 0.6)}>
           / {target}
         </text>
       </svg>

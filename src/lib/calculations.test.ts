@@ -266,3 +266,46 @@ describe("clampItemKcal", () => {
     expect(clampItemKcal(NaN)).toBe(0);
   });
 });
+
+describe("su bardakları", () => {
+  it("bardaklar sırayla dolar", async () => {
+    const { waterGlassFills } = await import("./calculations");
+    expect(waterGlassFills(0, 5)).toEqual([0, 0, 0, 0, 0]);
+    expect(waterGlassFills(400, 5)).toEqual([1, 1, 0, 0, 0]);
+    expect(waterGlassFills(1000, 5)).toEqual([1, 1, 1, 1, 1]);
+  });
+  it("200'ün katı olmayan miktar son bardağı kısmen doldurur", async () => {
+    const { waterGlassFills } = await import("./calculations");
+    expect(waterGlassFills(250, 5).slice(0, 3)).toEqual([1, 0.25, 0]);
+  });
+  it("negatif miktar boş, kapasiteyi aşan miktar hepsini dolu gösterir", async () => {
+    const { waterGlassFills } = await import("./calculations");
+    expect(waterGlassFills(-100, 5)).toEqual([0, 0, 0, 0, 0]);
+    expect(waterGlassFills(3500, 5)).toEqual([1, 1, 1, 1, 1]);
+  });
+  it("dokunma: boş +200, dolu ya da kısmen dolu −200", async () => {
+    const { waterDeltaForGlass } = await import("./calculations");
+    expect(waterDeltaForGlass(0)).toBe(200);
+    expect(waterDeltaForGlass(1)).toBe(-200);
+    expect(waterDeltaForGlass(0.25)).toBe(-200);
+  });
+  it("bardak sayısı: varsayılan 5, istenen sıra, su sığmazsa otomatik sıra", async () => {
+    const { waterGlassCount } = await import("./calculations");
+    expect(waterGlassCount(0, 5)).toBe(5);
+    expect(waterGlassCount(0, 10)).toBe(10);
+    expect(waterGlassCount(1000, 5)).toBe(5);
+    expect(waterGlassCount(1200, 5)).toBe(10);
+    expect(waterGlassCount(2250, 5)).toBe(15);
+    expect(waterGlassCount(0, 0)).toBe(5);
+    expect(waterGlassCount(99999, 5)).toBe(50);
+    expect(waterGlassCount(0, 500)).toBe(50);
+  });
+  it("sıra kaldırma: o sıradaki su düşülür, en az 5 bardak kalır", async () => {
+    const { removeWaterRow } = await import("./calculations");
+    expect(removeWaterRow(1400, 10)).toEqual({ glasses: 5, deltaMl: -400 });
+    expect(removeWaterRow(600, 10)).toEqual({ glasses: 5, deltaMl: -0 });
+    expect(removeWaterRow(2000, 10)).toEqual({ glasses: 5, deltaMl: -1000 });
+    expect(removeWaterRow(1100, 15)).toEqual({ glasses: 10, deltaMl: -0 });
+    expect(removeWaterRow(800, 5)).toEqual({ glasses: 5, deltaMl: -0 });
+  });
+});

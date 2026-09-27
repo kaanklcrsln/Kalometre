@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { AvatarProvider } from "./avatar/AvatarProvider";
 import { BottomNav } from "./components/BottomNav";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ChatProvider } from "./hooks/chat";
 import { SessionContext, useSession } from "./hooks/session";
 import { useAuth } from "./hooks/useAuth";
@@ -17,13 +18,7 @@ import Welcome from "./pages/Welcome";
 
 // recharts büyük; yalnızca kilo sayfasında yüklensin.
 const Weight = lazy(() => import("./pages/Weight"));
-// Avatar yalnızca hesap oluştururken görünür; giriş yapmış kullanıcı bu kodu indirmez.
-const LazyRoamingAvatar = lazy(() => import("./avatar/RoamingAvatar").then((m) => ({ default: m.RoamingAvatar })));
-const RoamingAvatar = () => (
-  <Suspense fallback={null}>
-    <LazyRoamingAvatar />
-  </Suspense>
-);
+const Admin = lazy(() => import("./pages/Admin"));
 
 const Loading = () => (
   <div className="fullscreen">
@@ -47,25 +42,13 @@ function Root() {
 
   if (authLoading || (user && docLoading)) return <Loading />;
   if (error) return <p className="alert">{error}</p>;
-  // Hesap oluşturma boyunca avatar ekranın boş alanlarında gezer.
-  if (!user)
-    return (
-      <>
-        <Welcome />
-        <RoamingAvatar />
-      </>
-    );
-  if (!userDoc)
-    return (
-      <>
-        <Onboarding user={user} mode="new" existing={null} />
-        <RoamingAvatar />
-      </>
-    );
+  if (!user) return <Welcome />;
+  if (!userDoc) return <Onboarding user={user} mode="new" existing={null} />;
 
   return (
     <SessionContext.Provider value={{ uid: user.uid, username: user.username, userDoc }}>
       <ChatProvider key={user.uid}>
+        <RouteErrorBoundary>
         <Suspense fallback={<Loading />}>
           <Routes>
             <Route path="/" element={<Home />} />
@@ -74,9 +57,11 @@ function Root() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/weight" element={<Weight />} />
             <Route path="/replan" element={<ReplanGuard />} />
+            <Route path="/admin" element={<Admin />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
+        </RouteErrorBoundary>
         <NavUnlessFullscreen />
       </ChatProvider>
     </SessionContext.Provider>
@@ -87,12 +72,13 @@ function Root() {
 function ReplanGuard(): ReactNode {
   const { uid, username, userDoc } = useSession();
   if (userDoc.goal && isGoalLocked(userDoc.goal, todayKey())) return <Navigate to="/settings" replace />;
-  return (
-    <>
-      <Onboarding user={{ uid, username }} mode="replan" existing={userDoc} />
-      <RoamingAvatar />
-    </>
-  );
+  return <Onboarding user={{ uid, username }} mode="replan" existing={userDoc} />;
+}
+
+/** Sayfa değişince hata durumu sıfırlansın: çöken sayfadan alt barla başka sayfaya geçilebilir. */
+function RouteErrorBoundary({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  return <ErrorBoundary key={pathname}>{children}</ErrorBoundary>;
 }
 
 function NavUnlessFullscreen() {

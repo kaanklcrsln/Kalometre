@@ -12,9 +12,10 @@
     "typecheck": "tsc -b",
     "emulators": "firebase emulators:start --only auth,firestore --project demo-kalometre",
     "deploy": "npm run build && firebase deploy --only hosting",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-kalometre \"vitest run --config vitest.rules.config.ts\"",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-kalometre-rules \"vitest run --config vitest.rules.config.ts\"",
     "dev:emu": "vite --mode emulator",
-    "deploy:rules": "firebase deploy --only firestore:rules"
+    "deploy:rules": "firebase deploy --only firestore:rules",
+    "admin": "node scripts/set-admin.mjs"
   },
   "dependencies": {
     "@bible-strong/avatar-react": "^0.1.0",
@@ -29,6 +30,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "firebase-admin": "^14.5.0",
     "firebase-tools": "^15.31.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",

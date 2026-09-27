@@ -1,4 +1,8 @@
 import { Link } from "react-router";
+import { AccountCard } from "../components/AccountCard";
+import { FeedbackCard } from "../components/FeedbackCard";
+import { LegalCard } from "../components/LegalCard";
+import { useIsAdmin } from "../hooks/useIsAdmin";
 import { useSession } from "../hooks/session";
 import { useSettings } from "../hooks/useSettings";
 import { MEAL_LABELS, MEALS } from "../lib/calculations";
@@ -8,13 +12,15 @@ export default function Settings() {
   const { uid, userDoc } = useSession();
   const s = useSettings(uid, userDoc);
   const { profile } = userDoc;
+  const isAdmin = useIsAdmin(uid);
 
   return (
     <main className="stack-lg fade-in">
-      <div className="stack" style={{ gap: 4 }}>
-        <h2>Ayarlar</h2>
-        <p className="muted small">@{profile.username}</p>
-      </div>
+      <h2>Ayarlar</h2>
+
+      <AccountCard username={profile.username} />
+
+      <FeedbackCard uid={uid} username={profile.username} name={profile.name} />
 
       <form
         className="stack"
@@ -77,6 +83,15 @@ export default function Settings() {
         <span>Kilo takibi</span>
         <span aria-hidden>›</span>
       </Link>
+
+      {isAdmin === true && (
+        <Link to="/admin" className="card row between" style={{ color: "inherit", textDecoration: "none" }}>
+          <span>Yönetici paneli</span>
+          <span aria-hidden>›</span>
+        </Link>
+      )}
+
+      <LegalCard />
 
       <button type="button" className="btn btn-ghost" onClick={s.signOut}>
         Çıkış yap

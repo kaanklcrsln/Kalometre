@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { useAvatarMood } from "../avatar/AvatarProvider";
-import { ONBOARDING_MOODS } from "../avatar/moods";
+import { useAvatar } from "../avatar/AvatarProvider";
+import { PRIVACY_NOTICE } from "../config/legal";
 import { useAuthForm } from "../hooks/useAuthForm";
 
 const INTRO_MS = 1400;
@@ -19,9 +19,6 @@ export default function Welcome() {
     };
   }, []);
 
-  // Uyuyan avatar "Hoşgeldin" ile uyanır.
-  useAvatarMood(phase === "auth" ? null : ONBOARDING_MOODS.intro, phase === "auth" ? "auth" : "intro");
-
   if (phase !== "auth") {
     return (
       <main className="fullscreen" onClick={() => setPhase("auth")}>
@@ -33,9 +30,10 @@ export default function Welcome() {
 }
 
 function AuthPanel() {
-  const f = useAuthForm();
+  const avatar = useAvatar();
+  // Avatar ana sayfaya ilk gelişte yeşile dönüp kutlar.
+  const f = useAuthForm({ onSuccess: avatar.celebrateOnArrival });
   const isSignUp = f.mode === "signUp";
-  useAvatarMood(f.error ? ONBOARDING_MOODS.error : f.busy ? ONBOARDING_MOODS.busy : ONBOARDING_MOODS.auth);
 
   return (
     <main className="fullscreen fade-in">
@@ -93,6 +91,8 @@ function AuthPanel() {
         <button type="submit" className="btn btn-block" disabled={f.busy}>
           {f.busy ? "Bekle…" : isSignUp ? "Üye ol" : "Giriş yap"}
         </button>
+        {/* Aydınlatma: sağlık verisi toplamadan önce, üye olurken gösterilir. */}
+        {isSignUp && <p className="small muted">{PRIVACY_NOTICE}</p>}
       </form>
     </main>
   );

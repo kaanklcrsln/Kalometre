@@ -1,12 +1,9 @@
 import { lazy, Suspense } from "react";
 import { useNavigate } from "react-router";
-import { useAvatarMood } from "../avatar/AvatarProvider";
-import type { AvatarMood } from "../avatar/definition";
-import { ONBOARDING_MOODS as M, onTapMood } from "../avatar/moods";
 import { BmiReveal } from "../components/BmiReveal";
 import { MealSplitEditor } from "../components/MealSplitEditor";
 import { SportsPicker } from "../components/SportsPicker";
-import { useOnboarding, type OnboardingDraft, type OnboardingMode } from "../hooks/useOnboarding";
+import { useOnboarding, type OnboardingMode } from "../hooks/useOnboarding";
 import { BMI_CATEGORY_LABELS, PACES } from "../lib/calculations";
 import { formatDateTr } from "../lib/dates";
 import { signOut, type AuthUser } from "../services/auth";
@@ -14,28 +11,6 @@ import type { Sex, UserDoc } from "../types";
 
 // recharts yalnızca hız adımında yüklensin.
 const PaceChart = lazy(() => import("../components/PaceChart").then((m) => ({ default: m.PaceChart })));
-
-/** Adıma ve girilen verilere göre avatarın temel duygusu. VKİ adımında BmiReveal kendisi yönetir (null). */
-function moodFor(o: ReturnType<typeof useOnboarding>, d: OnboardingDraft): AvatarMood | null {
-  if (o.error) return M.error;
-  if (o.saving) return M.busy;
-  switch (o.step) {
-    case "name":
-      return d.name.trim() ? M.nameFilled : M.name;
-    case "body":
-      return o.isMinor ? M.minor : M.body;
-    case "bmi":
-      return null;
-    case "sports":
-      return d.sports.length ? M.sports : M.sportsEmpty;
-    case "target":
-      return M.target;
-    case "pace":
-      return d.paceKgPerMonth <= 3 ? M.paceRelaxed : d.paceKgPerMonth >= 6 ? M.paceFast : M.paceNormal;
-    case "final":
-      return o.mealsValid ? M.final : M.error;
-  }
-}
 
 interface Props {
   user: AuthUser;
@@ -54,7 +29,6 @@ export default function Onboarding({ user, mode, existing }: Props) {
   });
   const d = o.draft;
   const name = d.name.trim();
-  useAvatarMood(moodFor(o, d), o.step === "bmi" ? undefined : o.step);
 
   // VKİ ekranı kendi animasyonunu ve "Devam" butonunu yönetir.
   if (o.step === "bmi" && o.bmi !== null && o.bmiCategory) {
@@ -154,7 +128,7 @@ export default function Onboarding({ user, mode, existing }: Props) {
                     ["male", "Erkek"],
                   ] as [Sex, string][]
                 ).map(([value, label]) => (
-                  <button key={value} type="button" className="choice" {...onTapMood("happy")} aria-pressed={d.sex === value} onClick={() => o.update("sex", value)}>
+                  <button key={value} type="button" className="choice" aria-pressed={d.sex === value} onClick={() => o.update("sex", value)}>
                     {label}
                   </button>
                 ))}
