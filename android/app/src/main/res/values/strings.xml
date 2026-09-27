@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kalometre</string>
+    <string name="title_activity_main">Kalometre</string>
+    <string name="package_name">com.kaanklcrsln.kalometre</string>
+    <string name="custom_url_scheme">com.kaanklcrsln.kalometre</string>
+</resources>

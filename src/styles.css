@@ -44,6 +44,9 @@
   --radius-sm: 10px;
   --nav-h: 72px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  /* Güvenli alan: Android uygulamasında Capacitor --safe-area-inset-* verir, tarayıcıda env() (çoğunlukla 0). */
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
   color-scheme: light;
 }
 
@@ -68,8 +71,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
-#root { max-width: 480px; min-height: 100dvh; margin: 0 auto; padding: 20px 16px calc(var(--nav-h) + 32px); }
-#root:has(.fullscreen) { padding-bottom: 20px; }
+#root { max-width: 480px; min-height: 100dvh; margin: 0 auto; padding: calc(20px + var(--safe-top)) 16px calc(var(--nav-h) + 32px + var(--safe-bottom)); }
+#root:has(.fullscreen) { padding-bottom: calc(20px + var(--safe-bottom)); }
 
 h1, h2, h3 { margin: 0; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
 h1 { font-size: 32px; }
@@ -90,7 +93,7 @@ small, .small { font-size: 13px; }
 .grow { flex: 1; }
 
 .fullscreen {
-  min-height: calc(100dvh - 40px);
+  min-height: calc(100dvh - 40px - var(--safe-top) - var(--safe-bottom));
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -289,7 +292,7 @@ nav.bottom {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   background: var(--paper);
   border-top: 1.5px solid var(--ink-12);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--safe-bottom);
 }
 nav.bottom > div {
   max-width: 480px; height: var(--nav-h); margin: 0 auto; padding: 0 28px;
@@ -336,7 +339,7 @@ nav.bottom a.plus:active { transform: scale(0.95); }
 .typing span:nth-child(2) { animation-delay: 0.2s; }
 .typing span:nth-child(3) { animation-delay: 0.4s; }
 .chat-input {
-  position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + env(safe-area-inset-bottom)); z-index: 5;
+  position: fixed; left: 0; right: 0; bottom: calc(var(--nav-h) + var(--safe-bottom)); z-index: 5;
   background: var(--paper); padding: 10px 16px; border-top: 1.5px solid var(--ink-12);
 }
 /* Kalo+ kilidi: ekranın ortasında */
@@ -355,7 +358,7 @@ nav.bottom a.plus:active { transform: scale(0.95); }
 
 /* Sohbet boşken ortadaki avatar: akışı etkilemez, üst başlık ile yazı kutusu arasında ortalanır. */
 .chat-hero {
-  position: fixed; left: 0; right: 0; top: 64px; bottom: calc(var(--nav-h) + 76px + env(safe-area-inset-bottom));
+  position: fixed; left: 0; right: 0; top: calc(64px + var(--safe-top)); bottom: calc(var(--nav-h) + 76px + var(--safe-bottom));
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
   padding: 0 32px; pointer-events: none;
 }

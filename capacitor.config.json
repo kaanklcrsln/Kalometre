@@ -1,0 +1,16 @@
+{
+  "appId": "com.kaanklcrsln.kalometre",
+  "appName": "Kalometre",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#F7F7F2"
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css"
+    },
+    "Keyboard": {
+      "resizeOnFullScreen": true
+    }
+  }
+}

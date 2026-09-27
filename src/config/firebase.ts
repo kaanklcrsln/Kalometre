@@ -1,7 +1,9 @@
 import { initializeApp } from "firebase/app";
 import { initializeAppCheck, ReCaptchaEnterpriseProvider, type AppCheck } from "firebase/app-check";
-import { connectAuthEmulator, getAuth } from "firebase/auth";
+import { connectAuthEmulator, getAuth, indexedDBLocalPersistence, initializeAuth } from "firebase/auth";
 import { connectFirestoreEmulator, initializeFirestore } from "firebase/firestore";
+import { isNative } from "../platform";
+import { nativeAppCheckProvider } from "../platform/appCheck";
 
 const env = import.meta.env;
 
@@ -31,7 +33,10 @@ if (import.meta.env.DEV && import.meta.env.VITE_APPCHECK_DEBUG === "true") {
   (globalThis as { FIREBASE_APPCHECK_DEBUG_TOKEN?: boolean | string }).FIREBASE_APPCHECK_DEBUG_TOKEN =
     import.meta.env.VITE_APPCHECK_DEBUG_TOKEN || true;
 }
-if (siteKey && !usingEmulators) {
+if (isNative && !usingEmulators) {
+  // Android: token Play Integrity'den (geliştirmede debug sağlayıcıdan) gelir; bkz. platform/appCheck.ts.
+  appCheck = initializeAppCheck(app, { provider: nativeAppCheckProvider(), isTokenAutoRefreshEnabled: true });
+} else if (siteKey && !usingEmulators) {
   appCheck = initializeAppCheck(app, {
     provider: new ReCaptchaEnterpriseProvider(siteKey),
     isTokenAutoRefreshEnabled: true,
@@ -40,7 +45,9 @@ if (siteKey && !usingEmulators) {
   console.warn("[Kalometre] VITE_RECAPTCHA_ENTERPRISE_SITE_KEY yok; App Check kapalı. AI çağrıları App Check zorunluysa reddedilir.");
 }
 
-export const auth = getAuth(app);
+// Android WebView'da getAuth'un tarayıcı açılır pencere/yönlendirme bileşenleri gereksiz; oturum IndexedDB'de
+// kalıcı tutulur (uygulama kapanıp açılınca giriş gerekmez).
+export const auth = isNative ? initializeAuth(app, { persistence: indexedDBLocalPersistence }) : getAuth(app);
 export const firestore = initializeFirestore(app, {
   // Opsiyonel alanlar (ör. bodyFatPct) undefined ise hata vermek yerine atla.
   ignoreUndefinedProperties: true,

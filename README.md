@@ -93,6 +93,38 @@ npm run deploy                                 # yalnızca hosting
 npm run deploy:rules                           # Firestore kuralları
 ```
 
+## 8. Android uygulaması (Capacitor) — `kalometre-android` branch'i
+
+Aynı React kodu Capacitor ile Android uygulamasına paketlenir; web sürümü değişmez. Android'e özel kod
+yalnızca `src/platform/` altındadır ve `isNative` iken yüklenir (web paketine girmez).
+
+- **Uygulama kimliği:** `com.kaanklcrsln.kalometre` ([capacitor.config.json](capacitor.config.json)). Play'e yüklendikten sonra değiştirilemez.
+- **Firebase Android uygulaması:** `1:627999701177:android:a05268f4c7beaafcc04368`. `android/app/google-services.json` repoda yok:
+  ```bash
+  npx firebase apps:sdkconfig ANDROID 1:627999701177:android:a05268f4c7beaafcc04368 -o android/app/google-services.json
+  ```
+- **Gereksinim:** Android Studio (JDK 21 ve Android SDK 36 ile gelir).
+
+```bash
+npm run android:dev     # web derlemesi (App Check debug sağlayıcısı) + android/ klasörüne kopyala
+npm run android:open    # Android Studio'da aç → ▶ Run (emülatör ya da USB'li telefon)
+npm run android:build   # mağaza derlemesi (Play Integrity) + kopyala
+```
+
+**App Check (Android):** reCAPTCHA WebView'da çalışmaz; token'ı Android'in Play Integrity'si üretir ve
+[src/platform/appCheck.ts](src/platform/appCheck.ts) Firebase JS SDK'sına aktarır (Firestore ve KaloAI aynı token'ı kullanır).
+- Geliştirme (`android:dev`): debug sağlayıcı. Her kurulum ilk açılışta logcat'e bir secret yazar
+  (`adb logcat | grep DebugAppCheckProvider`, Android Studio'da Logcat'te `DebugAppCheckProvider` ara). Bu secret'ı
+  Firebase Console → App Check → Apps → Kalometre Android → ⋮ → *Manage debug tokens*'a ekle. Debug APK'yı kimseyle paylaşma.
+- Mağaza (`android:build`): Play Integrity. Yalnızca Play üzerinden (iç test dahil) kurulan uygulamada geçer.
+
+**Android davranışları** ([src/platform/android.ts](src/platform/android.ts)): geri tuşu önce açık paneli kapatır, sonra
+önceki sayfaya döner, ilk sayfada uygulamadan çıkar; yeni sekmede açılan linkler uygulama içi tarayıcıda açılır;
+durum çubuğu simgeleri temaya uyar. Uçtan uca çizim için güvenli alan payları `--safe-top` / `--safe-bottom`
+(styles.css); klavye açılınca görünüm küçülür.
+
+**İmzalama anahtarı** (`*.jks`, `keystore.properties`) ve `google-services.json` `.gitignore`'dadır; asla repoya ekleme.
+
 ## Ürün kuralları
 
 - **Renkler:** yalnızca 4 renk — Deep Teal `#4E6E58` (olumlu), Brick Red `#BB0A21` (olumsuz), Coffee Bean `#261C15` ve Porcelain `#F7F7F2` (genel). CSS'te [src/styles.css](src/styles.css) `:root` değişkenleri, SVG/grafiklerde [src/config/theme.ts](src/config/theme.ts).
