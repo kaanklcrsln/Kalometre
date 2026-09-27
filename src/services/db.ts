@@ -1,10 +1,14 @@
-// Firestore erişimi. Tüm yollar users/{uid}/** altında.
+// Firestore erişimi. Uygulamanın geri kalanı firebase/firestore'a doğrudan dokunmaz; yetkiler: firestore.rules.
 
 import {
   addDoc,
   collection,
+  collectionGroup,
   deleteDoc,
   doc,
+  documentId,
+  endAt,
+  getDocs,
   increment,
   limit,
   onSnapshot,
@@ -14,12 +18,14 @@ import {
   runTransaction,
   serverTimestamp,
   setDoc,
+  startAt,
   updateDoc,
   writeBatch,
   type DocumentData,
+  type DocumentReference,
 } from "firebase/firestore";
 import { firestore } from "../config/firebase";
-import { ADMIN_GRANT_DAYS, type EntitlementDoc, type UnlockRequest } from "../lib/entitlement";
+import { ADMIN_GRANT_DAYS, isKaloPlusActive, type EntitlementDoc, type UnlockRequest } from "../lib/entitlement";
 import { todayNoteId, type Note, type NoteType } from "../lib/notes";
 import type { DayDoc, Entry, Goal, NewEntry, Profile, UserDoc, WeightEntry } from "../types";
 
@@ -312,4 +318,105 @@ export function subscribeLatestNotes(onData: (notes: Note[]) => void, onError?: 
 /** Admin: notu sil. */
 export async function deleteNote(id: string): Promise<void> {
   await deleteDoc(doc(firestore, "notes", id));
+}
+
+// ---------- Admin: kullanıcı yönetimi ----------
+// Spark planında sunucu fonksiyonu yok: listeleme ve silme Firestore kurallarının admin yetkisiyle
+// istemciden yapılır. Giriş hesabını (Auth) silmek ve şifre değiştirmek yalnızca Admin SDK ile mümkün
+// (bkz. scripts/users.mjs).
+
+export interface AdminUserRow {
+  uid: string;
+  username: string;
+  name: string;
+  createdAtMs: number | null;
+  kaloPlus: boolean;
+}
+
+export interface DisabledUserRow {
+  uid: string;
+  username: string;
+  disabledAtMs: number | null;
+}
+
+/** Admin: onboarding'i bitirmiş tüm kullanıcılar, Kalo+ durumlarıyla. */
+export async function listUsersForAdmin(): Promise<AdminUserRow[]> {
+  const [usersSnap, entSnap] = await Promise.all([
+    getDocs(collection(firestore, "users")),
+    getDocs(collection(firestore, "entitlements")),
+  ]);
+  const now = Date.now();
+  const active = new Set(entSnap.docs.filter((d) => isKaloPlusActive(d.data(), now)).map((d) => d.id));
+  return usersSnap.docs
+    .map((d) => {
+      const data = d.data();
+      const ts = data.createdAt as { toMillis?: () => number } | null | undefined;
+      return {
+        uid: d.id,
+        username: data.profile?.username ?? "?",
+        name: data.profile?.name ?? "?",
+        createdAtMs: ts?.toMillis?.() ?? null,
+        kaloPlus: active.has(d.id),
+      };
+    })
+    .sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
+}
+
+/** Admin: kaldırılmış (kilitli) hesaplar. */
+export async function listDisabledUsers(): Promise<DisabledUserRow[]> {
+  const snap = await getDocs(collection(firestore, "disabledUsers"));
+  return snap.docs.map((d) => {
+    const ts = d.data().disabledAt as { toMillis?: () => number } | null | undefined;
+    return { uid: d.id, username: d.data().username, disabledAtMs: ts?.toMillis?.() ?? null };
+  });
+}
+
+/** Belgeleri 400'lük gruplar hâlinde siler (tek işlemde en fazla 500 yazma). */
+async function deleteRefs(refs: DocumentReference[]): Promise<void> {
+  for (let i = 0; i < refs.length; i += 400) {
+    const batch = writeBatch(firestore);
+    for (const ref of refs.slice(i, i + 400)) batch.delete(ref);
+    await batch.commit();
+  }
+}
+
+/**
+ * Admin: kullanıcıyı kaldır. Önce hesap kilitlenir (silme yarıda kalsa bile kullanıcı uygulamayı
+ * kullanamaz), sonra tüm verileri silinir. Giriş hesabı (Auth) kalır; tamamen silmek için scripts/users.mjs.
+ */
+export async function removeUserAsAdmin(adminUid: string, uid: string, username: string): Promise<void> {
+  if (uid === adminUid) throw new Error("Kendini kaldıramazsın.");
+  await setDoc(doc(firestore, "disabledUsers", uid), { username, disabledBy: adminUid, disabledAt: serverTimestamp() });
+
+  // Gün dokümanı olmayan günlerin yemek kayıtları ancak koleksiyon grubu sorgusuyla bulunur.
+  // Aralık "users/<uid>" önekini kapsar; başka kullanıcıya ait eşleşmeler yol kontrolüyle elenir.
+  const entriesSnap = await getDocs(
+    query(collectionGroup(firestore, "entries"), orderBy(documentId()), startAt(`users/${uid}`), endAt(`users/${uid}\uf8ff`)),
+  );
+  const entryRefs = entriesSnap.docs.map((d) => d.ref).filter((ref) => ref.path.startsWith(`users/${uid}/`));
+  const [weightsSnap, daysSnap, notesSnap] = await Promise.all([
+    getDocs(collection(firestore, "users", uid, "weights")),
+    getDocs(collection(firestore, "users", uid, "days")),
+    getDocs(query(collection(firestore, "notes"), where("uid", "==", uid))),
+  ]);
+
+  await deleteRefs([
+    ...entryRefs,
+    ...weightsSnap.docs.map((d) => d.ref),
+    ...daysSnap.docs.map((d) => d.ref),
+    ...notesSnap.docs.map((d) => d.ref),
+    doc(firestore, "entitlements", uid),
+    doc(firestore, "unlockRequests", uid),
+    doc(firestore, "users", uid),
+  ]);
+}
+
+/** Admin: kaldırılan hesabın kilidini aç (kullanıcı yeniden profil oluşturabilir; eski veriler geri gelmez). */
+export async function restoreUserAsAdmin(uid: string): Promise<void> {
+  await deleteDoc(doc(firestore, "disabledUsers", uid));
+}
+
+/** Kullanıcı: hesabım kaldırıldı mı? */
+export function subscribeAccountDisabled(uid: string, onData: (disabled: boolean) => void, onError?: OnError): Unsubscribe {
+  return onSnapshot(doc(firestore, "disabledUsers", uid), (snap) => onData(snap.exists()), onError);
 }

@@ -12,8 +12,12 @@ import {
   MAINTAIN_THRESHOLD_KG,
   MEAL_STEP_KCAL,
   MIN_ADULT_AGE,
+  paceChoices,
   planForProfile,
+  rescaleMeals,
+  safePace,
   validateGoal,
+  type PaceChoice,
   type Plan,
 } from "../lib/calculations";
 import { todayKey } from "../lib/dates";
@@ -74,6 +78,8 @@ export function useOnboarding(opts: {
   const [step, setStep] = useState<OnboardingStep>(mode === "new" ? "name" : "body");
   const [history, setHistory] = useState<OnboardingStep[]>([]);
   const [meals, setMeals] = useState<MealCalories | null>(null);
+  /** Son adımda kullanıcının seçtiği günlük kalori (girilene kadar öneri). */
+  const [calories, setCalories] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -105,10 +111,23 @@ export function useOnboarding(opts: {
         }
       : null;
 
-  const planFor = (pace: number): Plan | null =>
-    profile && Number.isFinite(targetWeightKg) ? planForProfile(profile, weightKg, targetWeightKg, pace, today) : null;
+  const planFor = (pace: number, dailyCalories?: number): Plan | null =>
+    profile && Number.isFinite(targetWeightKg)
+      ? planForProfile(profile, weightKg, targetWeightKg, pace, today, dailyCalories)
+      : null;
 
-  const plan = step === "pace" || step === "final" ? planFor(draft.paceKgPerMonth) : null;
+  // Hız butonları: her hızın önerdiği kalori ve güvenli olup olmadığı. Güvenli olmayan hız seçilemez;
+  // hiçbiri güvenli değilse sağlık tabanındaki en yüksek hız kullanılır.
+  const basePlan = step === "pace" || step === "final" ? planFor(draft.paceKgPerMonth) : null;
+  const choices: PaceChoice[] = basePlan && profile ? paceChoices(basePlan, profile.sex) : [];
+  const anySafe = choices.some((c) => c.safe);
+  const pace =
+    !basePlan || basePlan.direction === "maintain"
+      ? 0
+      : anySafe
+        ? safePace(draft.paceKgPerMonth, choices)
+        : Math.floor(basePlan.maxSafeKgPerMonth * 10) / 10;
+  const plan = basePlan ? planFor(pace, step === "final" ? (calories ?? undefined) : undefined) : null;
   const bmiValue = Number.isFinite(weightKg) && Number.isFinite(heightCm) ? bmi(weightKg, heightCm) : null;
 
   // ---------- Adım doğrulama ve geçişler ----------
@@ -167,8 +186,11 @@ export function useOnboarding(opts: {
     const to = nextStep();
     if (!to) return;
     if (to === "final") {
-      const p = planFor(isMaintain ? 0 : draft.paceKgPerMonth);
-      if (p) setMeals(defaultMealCalories(p.dailyCalories));
+      const p = planFor(isMaintain ? 0 : pace);
+      if (p) {
+        setCalories(p.dailyCalories);
+        setMeals(defaultMealCalories(p.dailyCalories));
+      }
     }
     setHistory((h) => [...h, step]);
     setStep(to);
@@ -196,12 +218,24 @@ export function useOnboarding(opts: {
   // ---------- Öğünler ----------
   const mealsValid = !!(meals && plan && isMealSplitValid(meals, plan.dailyCalories));
   const changeMeal = (meal: Meal, direction: 1 | -1) => {
-    if (meals) setMeals(adjustMeal(meals, meal, direction * MEAL_STEP_KCAL));
+    setMeals((m) => (m ? adjustMeal(m, meal, direction * MEAL_STEP_KCAL) : m));
+    setError(null);
+  };
+
+  const changeCalories = (value: number) => {
+    const p = planFor(pace, value);
+    if (!p) return;
+    setCalories(p.dailyCalories);
+    setMeals((m) => (m ? rescaleMeals(m, p.dailyCalories) : defaultMealCalories(p.dailyCalories)));
     setError(null);
   };
 
   const finish = async () => {
     if (!profile || !plan || !meals) return;
+    if (plan.direction === "lose" && !plan.reachable) {
+      setError("Bu kaloriyle hedefine ulaşamazsın. Günlük kaloriyi biraz düşür.");
+      return;
+    }
     if (!isMealSplitValid(meals, plan.dailyCalories)) {
       setError("Öğünlerin toplamı günlük kaloriye eşit olmalı.");
       return;
@@ -240,8 +274,11 @@ export function useOnboarding(opts: {
     bmi: bmiValue,
     bmiCategory: bmiValue !== null ? bmiCategory(bmiValue) : null,
     plan,
-    /** Grafik ve butonlar için: her hızın planı. */
-    planFor,
+    /** Hız butonları (önerilen kalori, güvenli mi). */
+    paceChoices: choices,
+    /** Hiçbir hız güvenli değilse true; plan sağlık tabanındaki en yüksek hızla kurulur. */
+    noSafePace: basePlan?.direction === "lose" && !anySafe,
+    changeCalories,
     meals,
     mealsValid,
     changeMeal,

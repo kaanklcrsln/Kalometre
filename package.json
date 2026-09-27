@@ -15,7 +15,8 @@
     "test:rules": "firebase emulators:exec --only firestore --project demo-kalometre-rules \"vitest run --config vitest.rules.config.ts\"",
     "dev:emu": "vite --mode emulator",
     "deploy:rules": "firebase deploy --only firestore:rules",
-    "admin": "node scripts/set-admin.mjs"
+    "admin": "node scripts/set-admin.mjs",
+    "users": "node scripts/users.mjs"
   },
   "dependencies": {
     "@bible-strong/avatar-react": "^0.1.0",

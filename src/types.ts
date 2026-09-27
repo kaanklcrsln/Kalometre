@@ -29,13 +29,13 @@ export interface Goal {
   /** yyyy-mm-dd */
   startDate: string;
   targetWeightKg: number;
-  /** Kullanıcının seçtiği hız (kg/ay). Koruma planında 0. */
+  /** Seçilen hız (kg/ay, güvenli değilse tabandaki en yüksek hız). Koruma planında 0. */
   paceKgPerMonth: number;
   /** yyyy-mm-dd */
   targetDate: string;
   dailyCalories: number;
   mealCalories: MealCalories;
-  /** Bu tarihe kadar (hariç) kalori ve öğün dağılımı değiştirilemez. yyyy-mm-dd */
+  /** Bu tarihe kadar (hariç) hedef kilo değiştirilemez (yeni plan kurulamaz); kalori ve öğünler serbest. yyyy-mm-dd */
   lockedUntil: string;
 }
 
@@ -87,5 +87,14 @@ export interface AiAnalysis {
 
 export interface ChatMessage {
   role: "user" | "model";
+  /** Modele geçmiş olarak giden metin (fotoğraf mesajında kısa açıklama). */
   text: string;
+  /** Yalnızca ekranda: kullanıcının gönderdiği yemek fotoğrafının küçültülmüş hâli (data URL, bellekte). */
+  imageUrl?: string;
+}
+
+/** Sohbet yanıtı: kullanıcı yediği bir şeyi anlattıysa food/kcal dolu gelir. */
+export interface ChatReply {
+  text: string;
+  food: { name: string; kcal: number } | null;
 }

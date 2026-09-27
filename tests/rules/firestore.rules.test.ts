@@ -9,6 +9,12 @@ import {
 import { readFileSync } from "node:fs";
 import {
   collection,
+  collectionGroup,
+  documentId,
+  endAt,
+  orderBy,
+  query,
+  startAt,
   deleteDoc,
   doc,
   getDoc,
@@ -171,6 +177,11 @@ describe("users/{uid} oluşturma", () => {
     );
   });
 
+  it("öğün 0 olabilir, eksi olamaz", async () => {
+    await assertSucceeds(create("kaan", valid({ goal: goal({ mealCalories: { breakfast: 0, lunch: 900, dinner: 600 } }) })));
+    await assertFails(create("kaan", valid({ goal: goal({ mealCalories: { breakfast: -50, lunch: 950, dinner: 600 } }) })));
+  });
+
   it("öğün toplamı günlük kaloriye eşit olmalı", async () => {
     await assertFails(create("kaan", valid({ goal: goal({ mealCalories: { breakfast: 500, lunch: 600, dinner: 450 } }) })));
   });
@@ -182,6 +193,7 @@ describe("users/{uid} oluşturma", () => {
     await assertFails(create("kaan", valid({ profile: profile({ bodyFatPct: 90 }) })));
     await assertFails(create("kaan", valid({ profile: profile({ sports: [{ sportId: "running", daysPerWeek: 9 }] }) })));
     await assertFails(create("kaan", valid({ goal: goal({ paceKgPerMonth: 20 }) })));
+    await assertFails(create("kaan", valid({ goal: goal({ paceKgPerMonth: -1 }) })));
     await assertFails(create("kaan", valid({ goal: goal({ targetWeightKg: 100 }) })));
     await assertFails(create("kaan", valid({ goal: goal({ startDate: "26.09.2026" }) })));
   });
@@ -193,9 +205,29 @@ describe("users/{uid} güncelleme ve kilit", () => {
     await assertSucceeds(updateDoc(doc(as("kaan"), "users/kaan"), { profile: profile({ name: "Kaan K" }) }));
   });
 
-  it("kilitliyken hedef değişemez", async () => {
+  it("kilitliyken günlük kalori, öğünler ve hedef tarihi değişebilir", async () => {
     await seedUser("kaan");
-    await assertFails(updateDoc(doc(as("kaan"), "users/kaan"), { goal: goal({ dailyCalories: 2000, mealCalories: { breakfast: 600, lunch: 800, dinner: 600 } }) }));
+    await assertSucceeds(
+      updateDoc(doc(as("kaan"), "users/kaan"), {
+        goal: goal({ dailyCalories: 2000, mealCalories: { breakfast: 0, lunch: 1200, dinner: 800 }, targetDate: "2027-03-01" }),
+      }),
+    );
+  });
+
+  it("kilitliyken hedef kilo, başlangıç ve kilit tarihi değişemez", async () => {
+    await seedUser("kaan");
+    const ref = doc(as("kaan"), "users/kaan");
+    await assertFails(updateDoc(ref, { goal: goal({ targetWeightKg: 60 }) }));
+    await assertFails(updateDoc(ref, { goal: goal({ startWeightKg: 95 }) }));
+    await assertFails(updateDoc(ref, { goal: goal({ lockedUntil: "2026-09-27" }) }));
+    await assertFails(updateDoc(ref, { goal: goal({ startDate: "2026-09-27" }) }));
+  });
+
+  it("kilitliyken de günlük kalori tabanın altına inemez", async () => {
+    await seedUser("kaan");
+    await assertFails(
+      updateDoc(doc(as("kaan"), "users/kaan"), { goal: goal({ dailyCalories: 1000, mealCalories: { breakfast: 0, lunch: 500, dinner: 500 } }) }),
+    );
   });
 
   it("kilitliyken profilin diğer alanları değişemez", async () => {
@@ -534,5 +566,72 @@ describe("notes (şikayet ve öneri)", () => {
     await assertSucceeds(setDoc(doc(as("kaan"), `notes/${todayNoteId("kaan")}`), note()));
     await assertSucceeds(getDocs(collection(asAdmin(), "notes")));
     await assertSucceeds(deleteDoc(doc(asAdmin(), `notes/${todayNoteId("kaan")}`)));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Admin: kullanıcı yönetimi (listeleme, kaldırma)
+
+describe("admin kullanıcı yönetimi", () => {
+  const entryPath = "users/kaan/days/2026-09-26/entries/e1";
+
+  async function seedFullUser() {
+    await seedUser("kaan");
+    await seed("users/kaan/weights/2026-09-26", { weightKg: 92, createdAt: Timestamp.now() });
+    await seed("users/kaan/days/2026-09-26", { waterMl: 400, aiRequests: 3 });
+    await seed(entryPath, { ...entry(), createdAt: Timestamp.now() });
+  }
+
+  it("admin tüm kullanıcıları listeler ve okur; normal kullanıcı listeleyemez", async () => {
+    await seedFullUser();
+    await assertSucceeds(getDocs(collection(asAdmin(), "users")));
+    await assertSucceeds(getDoc(doc(asAdmin(), "users/kaan")));
+    await assertSucceeds(getDocs(collection(asAdmin(), "users/kaan/weights")));
+    await assertSucceeds(getDocs(collection(asAdmin(), "users/kaan/days")));
+    await assertFails(getDocs(collection(as("ali"), "users")));
+  });
+
+  it("admin bir kullanıcının tüm yemek kayıtlarını koleksiyon grubu sorgusuyla bulur", async () => {
+    await seedFullUser();
+    const q = query(collectionGroup(asAdmin(), "entries"), orderBy(documentId()), startAt("users/kaan"), endAt("users/kaan\uf8ff"));
+    await assertSucceeds(getDocs(q));
+    const qUser = query(collectionGroup(as("ali"), "entries"), orderBy(documentId()), startAt("users/kaan"), endAt("users/kaan\uf8ff"));
+    await assertFails(getDocs(qUser));
+  });
+
+  it("admin kullanıcı verilerini siler; kullanıcı kendi profilini ve gün dokümanını silemez", async () => {
+    await seedFullUser();
+    await assertFails(deleteDoc(doc(as("kaan"), "users/kaan")));
+    await assertFails(deleteDoc(doc(as("kaan"), "users/kaan/days/2026-09-26")));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), entryPath)));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), "users/kaan/weights/2026-09-26")));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), "users/kaan/days/2026-09-26")));
+    await assertSucceeds(deleteDoc(doc(asAdmin(), "users/kaan")));
+  });
+
+  const disable = (over: Record<string, unknown> = {}) => ({ username: "kaan", disabledBy: "boss", disabledAt: serverTimestamp(), ...over });
+
+  it("admin hesabı kilitler; kendini kilitleyemez; normal kullanıcı kimseyi kilitleyemez", async () => {
+    await assertSucceeds(setDoc(doc(asAdmin(), "disabledUsers/kaan"), disable()));
+    await assertFails(setDoc(doc(asAdmin(), "disabledUsers/boss"), disable({ username: "boss" })));
+    await assertFails(setDoc(doc(as("ali"), "disabledUsers/kaan"), disable({ disabledBy: "ali" })));
+    await assertFails(setDoc(doc(asAdmin(), "disabledUsers/ali"), disable({ username: "ali", disabledBy: "baskasi" })));
+  });
+
+  it("kilitlenen kullanıcı kilidini görür, kaldıramaz ve yeni profil açamaz", async () => {
+    await seed("disabledUsers/kaan", { username: "kaan", disabledBy: "boss", disabledAt: Timestamp.now() });
+    await assertSucceeds(getDoc(doc(as("kaan"), "disabledUsers/kaan")));
+    await assertFails(deleteDoc(doc(as("kaan"), "disabledUsers/kaan")));
+    await assertFails(
+      setDoc(doc(as("kaan"), "users/kaan"), { profile: profile(), goal: goal(), createdAt: serverTimestamp() }),
+    );
+  });
+
+  it("kilidi kaldırılan kullanıcı yeniden profil açabilir", async () => {
+    await seed("disabledUsers/kaan", { username: "kaan", disabledBy: "boss", disabledAt: Timestamp.now() });
+    await assertSucceeds(deleteDoc(doc(asAdmin(), "disabledUsers/kaan")));
+    await assertSucceeds(
+      setDoc(doc(as("kaan"), "users/kaan"), { profile: profile(), goal: goal(), createdAt: serverTimestamp() }),
+    );
   });
 });

@@ -6,11 +6,12 @@ rules_version = '2';
 //  - Yazılan her doküman alan alan doğrulanır (izin verilen alanlar, tipler, aralıklar).
 //  - createdAt sunucu zamanıdır ve sonradan değiştirilemez.
 //  - Günlük AI sayacı yalnızca 1'er artabilir, azaltılamaz, gün dokümanı silinemez.
-//  - Plan kilitliyken hedef ve profil (isim hariç) değiştirilemez.
+//  - Plan kilitliyken hedef kilo, tarihler ve profil (isim hariç) değiştirilemez; günlük kalori ve öğünler her zaman değişebilir.
 //  - Kalo+ üyeliği (entitlements): kullanıcı yalnızca okur; sunucu (Google Play) ya da admin yazar.
 //  - Admin = Firebase Auth özel yetkisi (custom claim) admin: true; yalnızca Admin SDK verebilir.
 //  - Kilit açma istekleri (unlockRequests): kullanıcı ister, yalnızca admin onaylar/reddeder.
 //  - Şikayet/öneri notları (notes): kullanıcı günde en fazla 1 not yazar, değiştiremez; yalnızca admin okur/siler.
+//  - Admin tüm kullanıcı verilerini okuyabilir ve silebilir; kaldırılan hesap (disabledUsers) yeni profil açamaz.
 // Testler: tests/rules/firestore.rules.test.ts  (npm run test:rules)
 
 service cloud.firestore {
@@ -97,9 +98,10 @@ service cloud.firestore {
       return m is map
         && m.keys().hasOnly(['breakfast', 'lunch', 'dinner'])
         && m.keys().hasAll(['breakfast', 'lunch', 'dinner'])
-        && isInt(m.breakfast, 100, 10000)
-        && isInt(m.lunch, 100, 10000)
-        && isInt(m.dinner, 100, 10000)
+        // Öğün 0 olabilir (ör. kahvaltı yapmayan kullanıcı).
+        && isInt(m.breakfast, 0, 10000)
+        && isInt(m.lunch, 0, 10000)
+        && isInt(m.dinner, 0, 10000)
         && m.breakfast + m.lunch + m.dinner == daily;
     }
 
@@ -110,7 +112,7 @@ service cloud.firestore {
         && isNum(g.startWeightKg, 30, 300)
         && isNum(g.targetWeightKg, 30, 300)
         && g.targetWeightKg <= g.startWeightKg
-        && g.paceKgPerMonth in [0, 3, 4, 6]
+        && isNum(g.paceKgPerMonth, 0, 6)
         && isDateKey(g.startDate) && isDateKey(g.targetDate) && isDateKey(g.lockedUntil)
         && g.targetDate >= g.startDate
         && g.lockedUntil > g.startDate
@@ -157,6 +159,28 @@ service cloud.firestore {
     match /entitlements/{uid} {
       allow read: if isOwner(uid) || isAdmin();
       allow create, update: if isAdmin() && validAdminGrant(data());
+      allow delete: if isAdmin();
+    }
+
+    // ---------- Admin: tüm yemek kayıtlarını bul (kullanıcı kaldırırken) ----------
+    // Gün dokümanı olmayan günlerin kayıtları ancak koleksiyon grubu sorgusuyla bulunabilir.
+    match /{path=**}/entries/{id} {
+      allow read: if isAdmin();
+    }
+
+    // ---------- disabledUsers/{uid}: admin tarafından kaldırılan hesaplar ----------
+    // Kullanıcı kendi kaydını okuyabilir (uygulama "hesabın kaldırıldı" gösterir); yalnızca admin yazar/siler.
+    // Admin kendini kaldıramaz.
+    match /disabledUsers/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isAdmin()
+        && uid != request.auth.uid
+        && data().keys().hasOnly(['username', 'disabledBy', 'disabledAt'])
+        && data().keys().hasAll(['username', 'disabledBy', 'disabledAt'])
+        && isStr(data().username, 3, 20)
+        && data().disabledBy == request.auth.uid
+        && data().disabledAt == request.time;
+      allow update: if false;
       allow delete: if isAdmin();
     }
 
@@ -227,32 +251,34 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if isOwner(uid);
+      allow read: if isOwner(uid) || isAdmin();
 
       allow create: if isOwner(uid)
         && validUser(data())
-        && data().createdAt == request.time;
+        && data().createdAt == request.time
+        // Admin tarafından kaldırılan hesap yeniden profil açamaz.
+        && !exists(/databases/$(database)/documents/disabledUsers/$(uid));
 
       allow update: if isOwner(uid)
         && validUser(data())
         && data().createdAt == resource.data.createdAt
         && (!isLocked()
-            || (data().goal == resource.data.goal
+            || (data().goal.diff(resource.data.goal).affectedKeys().hasOnly(['dailyCalories', 'mealCalories', 'targetDate'])
                 && data().profile.diff(resource.data.profile).affectedKeys().hasOnly(['name'])));
 
-      // Hesap silme henüz yok; eklenince sunucu tarafında (Cloud Function) yapılmalı.
-      allow delete: if false;
+      // Kullanıcı kendi profilini silemez; admin kullanıcı kaldırırken siler.
+      allow delete: if isAdmin();
 
       // ---------- users/{uid}/weights/{date} ----------
       match /weights/{date} {
-        allow read: if isOwner(uid);
+        allow read: if isOwner(uid) || isAdmin();
         allow create, update: if isOwner(uid)
           && isDateKey(date)
           && data().keys().hasOnly(['weightKg', 'createdAt'])
           && data().keys().hasAll(['weightKg', 'createdAt'])
           && isNum(data().weightKg, 30, 300)
           && data().createdAt == request.time;
-        allow delete: if isOwner(uid);
+        allow delete: if isOwner(uid) || isAdmin();
       }
 
       // ---------- users/{uid}/days/{date} ----------
@@ -263,7 +289,7 @@ service cloud.firestore {
             && (!('aiRequests' in d) || isInt(d.aiRequests, 0, 50));
         }
 
-        allow read: if isOwner(uid);
+        allow read: if isOwner(uid) || isAdmin();
 
         allow create: if isOwner(uid)
           && isDateKey(date)
@@ -276,8 +302,8 @@ service cloud.firestore {
           && (data().get('aiRequests', 0) == resource.data.get('aiRequests', 0)
               || data().get('aiRequests', 0) == resource.data.get('aiRequests', 0) + 1);
 
-        // Silinirse AI sayacı sıfırlanırdı.
-        allow delete: if false;
+        // Kullanıcı silemez (AI sayacı sıfırlanırdı); admin kullanıcı kaldırırken siler.
+        allow delete: if isAdmin();
 
         // ---------- users/{uid}/days/{date}/entries/{id} ----------
         match /entries/{id} {
@@ -315,7 +341,7 @@ service cloud.firestore {
               && d.editedByUser is bool;
           }
 
-          allow read: if isOwner(uid);
+          allow read: if isOwner(uid) || isAdmin();
           allow create: if isOwner(uid)
             && isDateKey(date)
             && validEntry(data())
@@ -324,7 +350,7 @@ service cloud.firestore {
             && validEntry(data())
             && data().createdAt == resource.data.createdAt
             && onlyChanged(['items', 'meal', 'totalKcal', 'editedByUser']);
-          allow delete: if isOwner(uid);
+          allow delete: if isOwner(uid) || isAdmin();
         }
       }
     }

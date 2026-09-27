@@ -16,6 +16,11 @@ import {
   goalFromPlan,
   isGoalLocked,
   isMealSplitValid,
+  KCAL_PER_KG,
+  paceChoices,
+  rescaleMeals,
+  safePace,
+  updateGoalCalories,
   planLine,
   sportKcalPerDay,
   suggestMeal,
@@ -126,57 +131,81 @@ describe("buildPlan", () => {
     today,
   };
 
-  it("taban yoksa: hedef = bazal − açık, hız seçilen hız", () => {
+  it("öneri = harcama (bazal × 1.2 + spor) − hızın açığı; tarih aynı açıktan", () => {
     const p = buildPlan({ ...man, weightKg: 130, targetWeightKg: 100 });
     expect(p.bmr).toBe(2280);
-    expect(p.floorApplied).toBe(false);
-    expect(p.dailyCalories).toBe(1510);
-    expect(p.effectiveKgPerMonth).toBe(3);
+    expect(p.dailyBurn).toBe(2736);
+    expect(p.suggestedCalories).toBe(1966);
+    expect(p.dailyCalories).toBe(1966);
+    expect(p.dailyDeficit).toBe(770);
+    expect(p.monthlyKg).toBe(3);
+    // 30 kg × 7700 / 770 = 300 gün = 30 / 3 × 30
     expect(p.days).toBe(300);
     expect(p.targetDate).toBe("2026-10-28");
     expect(p.notices).toEqual([]);
   });
 
-  it("erkekte 1500 tabanı uygulanır ve tarih gerçek açığa göre hesaplanır", () => {
-    const p = buildPlan(man);
-    expect(p.floorApplied).toBe(true);
-    expect(p.dailyCalories).toBe(1500);
-    expect(p.dailyBurn).toBe(2136);
-    // (2136 − 1500) × 30 / 7700 ≈ 2.48 kg/ay
-    expect(p.effectiveKgPerMonth).toBe(2.5);
-    expect(p.days).toBe(122);
-    expect(p.notices).toHaveLength(1);
+  it("herkes aynı kaloriyi almaz: harcamaya göre değişir", () => {
+    const small = buildPlan({ ...man, weightKg: 100, targetWeightKg: 90 });
+    const big = buildPlan({ ...man, weightKg: 130, targetWeightKg: 90 });
+    const sporty = buildPlan({ ...man, weightKg: 100, targetWeightKg: 90, sports: [{ sportId: "running", daysPerWeek: 4 }] });
+    expect(new Set([small.dailyCalories, big.dailyCalories, sporty.dailyCalories]).size).toBe(3);
   });
 
-  it("spor gerçek açığı artırır ama seçilen hızı aşmaz", () => {
-    const p = buildPlan({ ...man, paceKgPerMonth: 4, sports: [{ sportId: "running", daysPerWeek: 3 }] });
-    expect(p.sportKcalPerDay).toBe(302);
-    expect(p.dailyCalories).toBe(1500);
-    expect(p.effectiveKgPerMonth).toBe(3.7);
-    expect(p.days).toBe(83);
-
-    const lots = buildPlan({ ...man, paceKgPerMonth: 3, sports: [{ sportId: "martial", daysPerWeek: 7 }] });
-    expect(lots.effectiveKgPerMonth).toBe(3);
+  it("seçilen hız, gösterilen aylık kilo ve gün sayısı her zaman tutarlı", () => {
+    for (const sex of ["male", "female"] as const) {
+      for (const w of [70, 90, 120, 160]) {
+        for (const pace of [3, 4, 6]) {
+          const p = buildPlan({ ...man, sex, weightKg: w, targetWeightKg: Math.max(w - 15, 60), paceKgPerMonth: pace });
+          if (p.direction !== "lose") continue;
+          expect(p.dailyDeficit).toBe(p.dailyBurn - p.dailyCalories);
+          expect(p.days).toBe(Math.ceil(((w - p.targetWeightKg) * KCAL_PER_KG) / p.dailyDeficit));
+          expect(p.monthlyKg).toBeCloseTo((p.dailyDeficit * 30) / KCAL_PER_KG, 1);
+          if (pace <= p.maxSafeKgPerMonth) expect(p.monthlyKg).toBeCloseTo(pace, 1);
+          else expect(p.dailyCalories).toBe(sex === "male" ? 1500 : 1200);
+        }
+      }
+    }
   });
 
-  it("kadında 1200 tabanı", () => {
+  it("güvenli en yüksek hız = (harcama − taban) × 30 / 7700; üstündeki hızlar güvenli değil", () => {
     const p = buildPlan({ ...man, sex: "female", weightKg: 100, heightCm: 165, targetWeightKg: 80, paceKgPerMonth: 4 });
-    expect(p.dailyCalories).toBe(1200);
-    expect(p.effectiveKgPerMonth).toBe(3.4);
+    expect(p.dailyBurn).toBe(2064);
+    expect(p.maxSafeKgPerMonth).toBe(3.4);
+    expect(paceChoices(p, "female").map((c) => c.safe)).toEqual([true, false, false]);
+    expect(paceChoices(p, "female")[0].suggestedCalories).toBe(1294);
+    expect(safePace(6, paceChoices(p, "female"))).toBe(3);
+  });
+
+  it("kullanıcının seçtiği kalori tarihi belirler; taban ve 6000 sınırı", () => {
+    const base = { ...man, weightKg: 130, targetWeightKg: 100 };
+    const p = buildPlan({ ...base, dailyCalories: 2136 });
+    expect(p.dailyCalories).toBe(2136);
+    expect(p.dailyDeficit).toBe(600);
+    expect(p.days).toBe(385);
+    expect(buildPlan({ ...base, dailyCalories: 900 }).dailyCalories).toBe(1500);
+    expect(buildPlan({ ...base, dailyCalories: 9000 }).dailyCalories).toBe(6000);
+  });
+
+  it("harcamaya eşit ya da fazla kaloriyle hedefe ulaşılamaz", () => {
+    const p = buildPlan({ ...man, weightKg: 130, targetWeightKg: 100, dailyCalories: 2800 });
+    expect(p.reachable).toBe(false);
+    expect(p.days).toBe(0);
+    expect(p.notices).toHaveLength(1);
   });
 
   it("günlük kalori asla tabanın altına inmez", () => {
     for (const sex of ["male", "female"] as const) {
       for (const w of [55, 70, 90, 120, 160]) {
         for (const pace of [3, 4, 6]) {
-          const p = buildPlan({ ...man, sex, weightKg: w, targetWeightKg: Math.max(w - 10, 60), paceKgPerMonth: pace });
+          const p = buildPlan({ ...man, sex, weightKg: w, targetWeightKg: Math.max(w - 10, 60), paceKgPerMonth: pace, dailyCalories: 0 });
           expect(p.dailyCalories).toBeGreaterThanOrEqual(sex === "male" ? 1500 : 1200);
         }
       }
     }
   });
 
-  it("harcama tabanın altındaysa koruma planına döner", () => {
+  it("tabanda bile açık yoksa koruma planına döner", () => {
     const p = buildPlan({ ...man, weightKg: 50, heightCm: 150, age: 60, targetWeightKg: 45 });
     expect(p.direction).toBe("maintain");
     expect(p.dailyCalories).toBe(1500);
@@ -190,19 +219,22 @@ describe("buildPlan", () => {
     expect(p.days).toBe(0);
   });
 
-  it("18 yaş altında kilo verme yerine koruma", () => {
-    const p = buildPlan({ ...man, age: 16 });
+  it("18 yaş altında kilo verme yok, kalori harcamanın altına inmez", () => {
+    const p = buildPlan({ ...man, age: 16, dailyCalories: 1600 });
     expect(p.direction).toBe("maintain");
     expect(p.targetWeightKg).toBe(80);
+    expect(p.dailyCalories).toBe(p.dailyBurn);
   });
 });
 
-describe("goalFromPlan / kilit", () => {
-  const meals = { breakfast: 450, lunch: 600, dinner: 450 };
-  it("kilo verme planı hedef tarihine kadar kilitli", () => {
-    const plan = buildPlan({
-      sex: "male", age: 30, heightCm: 180, weightKg: 130, sports: [], targetWeightKg: 100, paceKgPerMonth: 3, today,
-    });
+describe("goalFromPlan / kilit / kalori değişimi", () => {
+  const meals = { breakfast: 590, lunch: 786, dinner: 590 };
+  const profile = { sex: "male" as const, birthYear: 1996, heightCm: 180, sports: [] };
+  const losePlan = () =>
+    buildPlan({ sex: "male", age: 30, heightCm: 180, weightKg: 130, sports: [], targetWeightKg: 100, paceKgPerMonth: 3, today });
+
+  it("kilo verme planında hedef kilo hedef tarihine kadar kilitli", () => {
+    const plan = losePlan();
     const goal = goalFromPlan(plan, 130, meals, today);
     expect(goal.startDate).toBe("2026-01-01");
     expect(goal.lockedUntil).toBe(plan.targetDate);
@@ -215,21 +247,40 @@ describe("goalFromPlan / kilit", () => {
     });
     expect(goalFromPlan(plan, 80, meals, today).lockedUntil).toBe("2026-01-31");
   });
+  it("kalori değişince tarih güncel kiloya göre yeniden hesaplanır, kilit değişmez", () => {
+    const goal = goalFromPlan(losePlan(), 130, meals, today);
+    const later = new Date(2026, 1, 1);
+    const { goal: next, plan } = updateGoalCalories(profile, goal, 125, 2000, { breakfast: 0, lunch: 1000, dinner: 1000 }, later);
+    expect(next.dailyCalories).toBe(2000);
+    expect(next.lockedUntil).toBe(goal.lockedUntil);
+    expect(next.startDate).toBe(goal.startDate);
+    expect(next.targetWeightKg).toBe(100);
+    expect(next.mealCalories.breakfast).toBe(0);
+    expect(plan.days).toBe(Math.ceil((25 * KCAL_PER_KG) / plan.dailyDeficit));
+    expect(next.targetDate).toBe(plan.targetDate);
+  });
 });
-
 describe("öğünler", () => {
   it("varsayılan dağılım toplamı günlük kaloriye eşit", () => {
     expect(defaultMealCalories(1500)).toEqual({ breakfast: 450, lunch: 600, dinner: 450 });
     const odd = defaultMealCalories(1517);
     expect(odd.breakfast + odd.lunch + odd.dinner).toBe(1517);
   });
-  it("öğün ayarı en az 100 kcal", () => {
-    expect(adjustMeal({ breakfast: 150, lunch: 600, dinner: 450 }, "breakfast", -100).breakfast).toBe(100);
+  it("öğün 0 olabilir, eksiye inmez", () => {
+    expect(adjustMeal({ breakfast: 50, lunch: 600, dinner: 450 }, "breakfast", -50).breakfast).toBe(0);
+    expect(adjustMeal({ breakfast: 0, lunch: 600, dinner: 450 }, "breakfast", -50).breakfast).toBe(0);
+    expect(isMealSplitValid({ breakfast: 0, lunch: 900, dinner: 600 }, 1500)).toBe(true);
     expect(adjustMeal({ breakfast: 450, lunch: 600, dinner: 450 }, "lunch", 50).lunch).toBe(650);
   });
   it("dağılım geçerliliği", () => {
     expect(isMealSplitValid({ breakfast: 450, lunch: 600, dinner: 450 }, 1500)).toBe(true);
     expect(isMealSplitValid({ breakfast: 500, lunch: 600, dinner: 450 }, 1500)).toBe(false);
+  });
+  it("kalori değişince öğünler oranlarıyla yeniden dağılır, 0 olan 0 kalır", () => {
+    expect(rescaleMeals({ breakfast: 0, lunch: 900, dinner: 600 }, 2000)).toEqual({ breakfast: 0, lunch: 1200, dinner: 800 });
+    const r = rescaleMeals({ breakfast: 450, lunch: 600, dinner: 450 }, 1733);
+    expect(r.breakfast + r.lunch + r.dinner).toBe(1733);
+    expect(rescaleMeals({ breakfast: 0, lunch: 0, dinner: 0 }, 1500)).toEqual({ breakfast: 450, lunch: 600, dinner: 450 });
   });
   it.each([
     [4, "dinner"],

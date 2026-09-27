@@ -88,3 +88,27 @@ export const CheckIcon = () => (
     <path d="M5 12.5 10 17 19 7" />
   </svg>
 );
+
+/** Profil / kullanıcılar (admin). */
+export const UsersIcon = () => (
+  <svg {...base} width={22} height={22}>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21v-1a7 7 0 0 1 14 0v1" />
+  </svg>
+);
+
+/** Düzenle (kalem). */
+export const EditIcon = () => (
+  <svg {...base} width={18} height={18}>
+    <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4z" />
+    <path d="M13.5 6.5l4 4" />
+  </svg>
+);
+
+/** Kamera (yemek fotoğrafı). */
+export const CameraIcon = () => (
+  <svg {...base} width={22} height={22}>
+    <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.8l1.4-2h4.6l1.4 2h1.8A2.5 2.5 0 0 1 20 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z" />
+    <circle cx="12" cy="12.5" r="3.5" />
+  </svg>
+);

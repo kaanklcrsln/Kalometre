@@ -5,10 +5,12 @@ import { BottomNav } from "./components/BottomNav";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ChatProvider } from "./hooks/chat";
 import { SessionContext, useSession } from "./hooks/session";
+import { useAccountDisabled } from "./hooks/useAccountDisabled";
 import { useAuth } from "./hooks/useAuth";
 import { useUserDoc } from "./hooks/useUserDoc";
 import { isGoalLocked } from "./lib/calculations";
 import { todayKey } from "./lib/dates";
+import { signOut } from "./services/auth";
 import AddEntry from "./pages/AddEntry";
 import Chat from "./pages/Chat";
 import Home from "./pages/Home";
@@ -39,8 +41,10 @@ export default function App() {
 function Root() {
   const { user, loading: authLoading } = useAuth();
   const { userDoc, loading: docLoading, error } = useUserDoc(user?.uid ?? null);
+  const disabled = useAccountDisabled(user?.uid ?? null);
 
-  if (authLoading || (user && docLoading)) return <Loading />;
+  if (authLoading || (user && (docLoading || disabled === null))) return <Loading />;
+  if (user && disabled) return <AccountRemoved />;
   if (error) return <p className="alert">{error}</p>;
   if (!user) return <Welcome />;
   if (!userDoc) return <Onboarding user={user} mode="new" existing={null} />;
@@ -65,6 +69,21 @@ function Root() {
         <NavUnlessFullscreen />
       </ChatProvider>
     </SessionContext.Provider>
+  );
+}
+
+/** Admin tarafından kaldırılan hesap: uygulama kullanılamaz (kurallar da yeni profil açmayı engeller). */
+function AccountRemoved() {
+  return (
+    <main className="fullscreen center">
+      <div className="card stack center" role="alert">
+        <h2>Hesabın kaldırıldı</h2>
+        <p className="muted">Bu hesap yönetici tarafından kaldırıldı. Bir hata olduğunu düşünüyorsan bizimle iletişime geç.</p>
+        <button type="button" className="btn" onClick={() => void signOut()}>
+          Çıkış yap
+        </button>
+      </div>
+    </main>
   );
 }
 

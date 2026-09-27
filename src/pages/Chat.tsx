@@ -1,14 +1,15 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useAvatarMood } from "../avatar/AvatarProvider";
-import { SendIcon } from "../components/Icons";
+import { ChatAddPanel } from "../components/ChatAddPanel";
+import { CameraIcon, SendIcon } from "../components/Icons";
 import { KaloPlusPaywall } from "../components/KaloPlusPaywall";
-import { MAX_INPUT_CHARS } from "../config/ai";
+import { MAX_INPUT_CHARS, PHOTO_ANALYSIS_ENABLED } from "../config/ai";
 import { useChat } from "../hooks/useChat";
 import { useDay } from "../hooks/useDay";
 import { useEntitlement } from "../hooks/useEntitlement";
 import { useSession } from "../hooks/session";
 import { useWeights } from "../hooks/useWeights";
-import { bmr, ageFromBirthYear } from "../lib/calculations";
+import { bmr, ageFromBirthYear, MEAL_LABELS, MEALS, suggestMeal } from "../lib/calculations";
 import { todayKey } from "../lib/dates";
 
 const Mascot = lazy(() => import("../avatar/Mascot").then((m) => ({ default: m.Mascot })));
@@ -97,13 +98,16 @@ function ChatScreen() {
     el.style.height = `${Math.min(el.scrollHeight + 3, 140)}px`;
   }, [chat.input]);
 
+  const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [chat.messages.length, chat.loading]);
+  }, [chat.messages.length, chat.loading, chat.suggestion]);
+  const suggestedMeal = suggestMeal(new Date().getHours());
+  const boxOpen = !!chat.suggestion || !!chat.added;
 
   return (
-    <main className="stack-lg" style={{ paddingBottom: 72 }}>
+    <main className="stack-lg" style={{ paddingBottom: boxOpen ? 170 : 72 }}>
       <div className="row between">
         <h2>KaloAI</h2>
         {chat.messages.length > 0 && (
@@ -119,14 +123,16 @@ function ChatScreen() {
           <Suspense fallback={<div style={{ width: HERO_SIZE, height: HERO_SIZE }} />}>
             <Mascot size={HERO_SIZE} followTyping />
           </Suspense>
-          <p className="muted center">Merhaba {profile.name}! Beslenme, kalori ya da spor hakkında ne istersen sor.</p>
+          <p className="muted center">Merhaba {profile.name}! Beslenme, kalori ya da spor hakkında ne istersen sor
+            {PHOTO_ANALYSIS_ENABLED ? "; yemeğinin fotoğrafını atarsan kalorisini söylerim." : "."}
+          </p>
         </div>
       )}
 
       <div className="chat" aria-live="polite">
         {chat.messages.map((m, i) => (
-          <div key={i} className={`bubble ${m.role} fade-in`}>
-            {m.text}
+          <div key={i} className={`bubble ${m.role} fade-in${m.imageUrl ? " photo" : ""}`}>
+            {m.imageUrl ? <img src={m.imageUrl} alt="Gönderdiğin yemek fotoğrafı" /> : m.text}
           </div>
         ))}
         {chat.loading && (
@@ -140,7 +146,50 @@ function ChatScreen() {
         <div ref={endRef} />
       </div>
 
+      {chat.suggestion && chat.addingMeal && (
+        <ChatAddPanel
+          suggestion={chat.suggestion}
+          meal={chat.addingMeal}
+          saving={chat.saving}
+          error={chat.addError}
+          onSave={(name, kcal) => void chat.saveSuggestion(name, kcal)}
+          onBack={chat.cancelAdd}
+        />
+      )}
+
       <div className="chat-input">
+        {chat.suggestion ? (
+          <div className="chat-suggest fade-in" role="group" aria-label="Öğüne ekle">
+            <div className="row between" style={{ flexWrap: "nowrap", gap: 8 }}>
+              <p className="small" style={{ minWidth: 0 }}>
+                <strong>{chat.suggestion.name}</strong> · {chat.suggestion.kcal} kcal
+                <br />
+                <span className="muted">Öğüne ekleyelim mi?</span>
+              </p>
+              <button type="button" className="btn-inline" onClick={chat.dismissSuggestion} aria-label="Hayır, ekleme">
+                ×
+              </button>
+            </div>
+            <div className="chat-suggest-meals">
+              {MEALS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`btn btn-sm ${m === suggestedMeal ? "" : "btn-ghost"}`}
+                  onClick={() => chat.chooseMeal(m)}
+                >
+                  {MEAL_LABELS[m]}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          chat.added && (
+            <p className="chat-suggest positive small fade-in" role="status">
+              {chat.added}
+            </p>
+          )
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -165,6 +214,32 @@ function ChatScreen() {
           <button type="submit" className="btn btn-send" disabled={chat.loading || !chat.input.trim()} aria-label="Gönder">
             <SendIcon />
           </button>
+          {PHOTO_ANALYSIS_ENABLED && (
+            <>
+              <button
+                type="button"
+                className="btn btn-ghost btn-send"
+                disabled={chat.loading}
+                onClick={() => fileRef.current?.click()}
+                aria-label="Yemek fotoğrafı gönder"
+                title="Yemek fotoğrafı gönder"
+              >
+                <CameraIcon />
+              </button>
+              {/* capture yok: telefonda kamera ya da galeri seçilebilir. */}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void chat.sendPhoto(file);
+                }}
+              />
+            </>
+          )}
         </form>
       </div>
     </main>

@@ -12,3 +12,8 @@ tsconfig.tsbuildinfo
 *adminsdk*.json
 *service-account*.json
 *serviceAccount*.json
+
+# Kişisel: Claude Code bitiş sesi
+aykut.mp3
+.claude/settings.local.json
+.claude/hooks/

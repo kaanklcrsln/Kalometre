@@ -1,16 +1,19 @@
 import { lazy, Suspense } from "react";
 import { useNavigate } from "react-router";
 import { BmiReveal } from "../components/BmiReveal";
+import { CalorieTargetEditor } from "../components/CalorieTargetEditor";
 import { MealSplitEditor } from "../components/MealSplitEditor";
 import { SportsPicker } from "../components/SportsPicker";
 import { useOnboarding, type OnboardingMode } from "../hooks/useOnboarding";
-import { BMI_CATEGORY_LABELS, PACES } from "../lib/calculations";
+import { BMI_CATEGORY_LABELS } from "../lib/calculations";
 import { formatDateTr } from "../lib/dates";
 import { signOut, type AuthUser } from "../services/auth";
 import type { Sex, UserDoc } from "../types";
 
 // recharts yalnızca hız adımında yüklensin.
 const PaceChart = lazy(() => import("../components/PaceChart").then((m) => ({ default: m.PaceChart })));
+
+const fmtKg = (n: number) => n.toLocaleString("tr-TR", { maximumFractionDigits: 1 });
 
 interface Props {
   user: AuthUser;
@@ -190,61 +193,93 @@ export default function Onboarding({ user, mode, existing }: Props) {
               targetDate={o.plan.targetDate}
             />
             </Suspense>
-            <p style={{ fontSize: 20, fontWeight: 600 }} aria-live="polite">
-              Şu anki kilona göre ayda {o.plan.effectiveKgPerMonth.toLocaleString("tr-TR")} kilo vererek hedefine{" "}
-              <span className="positive">{o.plan.days} gün</span> sonra ulaşacaksın ({formatDateTr(o.plan.targetDate)}).
-            </p>
-            {o.plan.notices.map((n) => (
-              <p key={n} className="note small">
-                {n}
+            {o.plan.direction === "lose" ? (
+              <p style={{ fontSize: 20, fontWeight: 600 }} aria-live="polite">
+                Günde {o.plan.dailyCalories} kcal ile ayda {fmtKg(o.plan.monthlyKg)} kilo vererek hedefine{" "}
+                <span className="positive">{o.plan.days} gün</span> sonra ulaşacaksın ({formatDateTr(o.plan.targetDate)}).
               </p>
-            ))}
-            <div className="stack">
-              {PACES.map((p) => (
-                <button
-                  key={p.key}
-                  type="button"
-                  className="choice"
-                  aria-pressed={d.paceKgPerMonth === p.kgPerMonth}
-                  onClick={() => o.update("paceKgPerMonth", p.kgPerMonth)}
-                >
-                  {p.label} <span style={{ float: "right", opacity: 0.7 }}>ayda {p.kgPerMonth} kg</span>
-                </button>
-              ))}
-            </div>
+            ) : (
+              o.plan.notices.map((n) => (
+                <p key={n} className="note">
+                  {n}
+                </p>
+              ))
+            )}
+            <p className="small muted">
+              Günlük harcaman (hareket ve spor dahil) yaklaşık {o.plan.dailyBurn} kcal. Seçtiğin hız bu harcamadan ne kadar
+              az yiyeceğini belirler; son adımda kaloriyi istediğin gibi değiştirebilirsin.
+            </p>
+            {o.noSafePace && (
+              <p className="note small">
+                Sağlığın için günlük kalorin {o.plan.minCalories} kcal'nin altına inmiyor. Bu yüzden senin için güvenli en
+                yüksek hız ayda {fmtKg(o.plan.maxSafeKgPerMonth)} kg; spor ekleyerek hızlandırabilirsin.
+              </p>
+            )}
+            {o.plan.direction === "lose" && (
+              <div className="stack">
+                {o.paceChoices.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    className="choice"
+                    disabled={!p.safe}
+                    aria-pressed={o.plan!.paceKgPerMonth === p.kgPerMonth}
+                    onClick={() => o.update("paceKgPerMonth", p.kgPerMonth)}
+                  >
+                    {p.label}{" "}
+                    <span style={{ float: "right", opacity: 0.7 }}>
+                      ayda {p.kgPerMonth} kg · {p.safe ? `${p.suggestedCalories} kcal` : "güvenli değil"}
+                    </span>
+                  </button>
+                ))}
+                {!o.noSafePace && o.paceChoices.some((p) => !p.safe) && (
+                  <p className="small muted">
+                    Güvenli en yüksek hızın ayda {fmtKg(o.plan.maxSafeKgPerMonth)} kg; daha hızlısı {o.plan.minCalories} kcal'nin
+                    altına inmeyi gerektirir.
+                  </p>
+                )}
+              </div>
+            )}
           </>
         )}
 
         {o.step === "final" && o.plan && o.meals && (
           <>
-            <div className="stack">
-              <p className="muted">Bazal metabolizman</p>
-              <p className="stat-big">
-                {o.plan.bmr} <span style={{ fontSize: 20 }}>kcal</span>
-              </p>
-              <p className="small muted">
-                Bazal metabolizmana göre hesaplıyoruz; yani yaptığın sporu eklemiyoruz. Bu sayede fazladan yaktıklarını
-                görmeden, fark etmeden çok daha hızlı kalori açığı verebileceksin.
-              </p>
+            <div className="row" style={{ gap: 24 }}>
+              <div className="stack" style={{ gap: 4 }}>
+                <p className="small muted">Bazal metabolizman</p>
+                <p style={{ fontSize: 22, fontWeight: 600 }}>{o.plan.bmr} kcal</p>
+              </div>
+              <div className="stack" style={{ gap: 4 }}>
+                <p className="small muted">Günlük harcaman</p>
+                <p style={{ fontSize: 22, fontWeight: 600 }}>{o.plan.dailyBurn} kcal</p>
+              </div>
             </div>
+            <p className="small muted">
+              Bazal metabolizma, vücudunun hiç kıpırdamadan yaktığıdır. Günlük harcaman buna gündelik hareketi
+              {o.plan.sportKcalPerDay > 0 ? ` ve sporunu (günde ~${o.plan.sportKcalPerDay} kcal)` : ""} ekler. Ne kadar
+              yiyeceğine sen karar ver; harcamanın altında kaldıkça kilo verirsin.
+            </p>
+            {o.plan.direction === "maintain" &&
+              o.plan.notices.map((n) => (
+                <p key={n} className="note small">
+                  {n}
+                </p>
+              ))}
 
-            <div className="card card-dark stack">
-              <p>Günlük hedefin</p>
-              <p className="stat-big">
-                {o.plan.dailyCalories} <span style={{ fontSize: 20 }}>kcal</span>
-              </p>
-            </div>
+            <CalorieTargetEditor plan={o.plan} onChange={o.changeCalories} />
 
             <div className="stack">
               <h3>Öğünlerine böl, {name}</h3>
-              <p className="small muted">Sabah, öğle ve akşam kalorini kendine göre artırıp azalt.</p>
+              <p className="small muted">Sabah, öğle ve akşam kalorini kendine göre artırıp azalt; yapmadığın öğünü 0 yap.</p>
               <MealSplitEditor meals={o.meals} dailyCalories={o.plan.dailyCalories} onChange={o.changeMeal} />
             </div>
 
-            <p className="alert">
-              {o.plan.direction === "lose"
-                ? `Bu plan ${o.plan.days} gün boyunca, hedefine ulaşana kadar kilitli kalacak. Değiştiremeyeceksin.`
-                : "Bu plan 30 gün boyunca kilitli kalacak. Değiştiremeyeceksin."}
+            <p className="note small">
+              {o.plan.direction === "lose" && o.plan.reachable
+                ? `Hedef kilon ${formatDateTr(o.plan.targetDate)} tarihine kadar sabit kalacak.`
+                : "Planın 30 gün boyunca sabit kalacak."}{" "}
+              Günlük kalorini ve öğünlerini Ayarlar'dan ya da ana sayfadan istediğin zaman değiştirebilirsin.
             </p>
           </>
         )}

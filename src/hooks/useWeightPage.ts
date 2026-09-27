@@ -7,7 +7,7 @@ import { deleteWeight, setWeight } from "../services/db";
 import type { UserDoc } from "../types";
 import { useWeights } from "./useWeights";
 
-/** Kilo kaydı. Plan kilitli olduğu için yeni kilo kalori hedefini değiştirmez. */
+/** Kilo kaydı. Yeni kilo kalori hedefini kendiliğinden değiştirmez; kullanıcı hedefi düzenleyince tarih son kiloya göre hesaplanır. */
 export function useWeightPage(uid: string, userDoc: UserDoc) {
   const { weights, latest, loading } = useWeights(uid);
   const [date, setDate] = useState(todayKey());

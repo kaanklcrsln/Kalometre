@@ -14,10 +14,15 @@ export const MIN_DAILY_KCAL: Record<Sex, number> = { female: 1200, male: 1500 };
 export const BASE_ACTIVITY_FACTOR = 1.2;
 /** Mevcut ve hedef kilo arasındaki fark bundan küçükse "koru" planı. */
 export const MAINTAIN_THRESHOLD_KG = 0.1;
-/** Koruma planında kilit süresi (gün). */
+/** Koruma ya da tarihsiz planda hedef kilonun sabit kaldığı süre (gün). */
 export const MAINTAIN_LOCK_DAYS = 30;
 export const MEAL_STEP_KCAL = 50;
-export const MIN_MEAL_KCAL = 100;
+/** Öğün 0 olabilir (ör. kahvaltı yapmayan kullanıcı). */
+export const MIN_MEAL_KCAL = 0;
+export const CALORIE_STEP_KCAL = 50;
+export const MAX_DAILY_KCAL = 6000;
+/** Hedefe bundan uzun sürecekse bu kaloriyle "ulaşılamaz" sayılır. */
+export const MAX_GOAL_DAYS = 3 * 365;
 
 export const PACES = [
   { key: "relaxed", label: "Acelem yok", kgPerMonth: 3 },
@@ -156,7 +161,11 @@ export function validateGoal(input: {
   return null;
 }
 
-// ---------- Plan ----------
+/// ---------- Plan ----------
+//
+// Tek model: günlük harcama = bazal × 1,2 + spor. Kullanıcı hangi kaloriyi seçerse seçsin
+// açık = harcama − kalori ve hedef tarihi = kalan kilo × 7700 / açık. Hız butonları yalnızca bir kalori
+// ÖNERİR (harcama − hızın açığı); kullanıcı günlük kaloriyi sonradan istediği gibi değiştirebilir.
 
 export interface PlanInput {
   sex: Sex;
@@ -167,6 +176,8 @@ export interface PlanInput {
   sports: SportEntry[];
   targetWeightKg: number;
   paceKgPerMonth: number;
+  /** Kullanıcının seçtiği günlük kalori; verilmezse seçilen hızın önerisi kullanılır. */
+  dailyCalories?: number;
   today: Date;
 }
 
@@ -178,28 +189,44 @@ export interface Plan {
   sportKcalPerDay: number;
   /** Spor dahil tahmini günlük harcama. */
   dailyBurn: number;
+  /** Seçilebilecek en düşük günlük kalori: sağlık tabanı (18 yaş altında harcamanın kendisi). */
+  minCalories: number;
   direction: "lose" | "maintain";
   /** Etkin hedef (koruma planında mevcut kilo). */
   targetWeightKg: number;
+  /** Seçilen hız (koruma: 0). */
   paceKgPerMonth: number;
-  /** Taban uygulandıysa gerçekçi (düşürülmüş) hız; değilse seçilen hız. */
-  effectiveKgPerMonth: number;
+  /** Sağlık tabanına kadar inerek ulaşılabilecek en yüksek hız (kg/ay). */
+  maxSafeKgPerMonth: number;
+  /** Seçilen hızın önerdiği günlük kalori. */
+  suggestedCalories: number;
+  /** Uygulanan günlük kalori (kullanıcı seçimi ya da öneri, sınırlar içinde). */
   dailyCalories: number;
-  /** Günlük kalori sağlık tabanına çekildi mi? */
-  floorApplied: boolean;
+  /** Harcama − günlük kalori (negatifse fazla). */
+  dailyDeficit: number;
+  /** Bu açıkla ayda verilen kilo (açık yoksa 0). */
+  monthlyKg: number;
+  /** Bu kaloriyle hedefe makul sürede ulaşılır mı? (koruma planında her zaman true) */
+  reachable: boolean;
   days: number;
   /** yyyy-mm-dd */
   targetDate: string;
   notices: string[];
 }
 
-/**
- * Günlük hedef = bazal − seçilen hızın açığı (spor hesaba katılmaz).
- * Bu değer kadında 1200, erkekte 1500 kcal'nin altına inmez; inerse hedef tabana çekilir
- * ve tarih, spor dahil gerçek harcamadaki açığa göre dürüstçe yeniden hesaplanır.
- */
+export interface PaceChoice {
+  key: string;
+  label: string;
+  kgPerMonth: number;
+  /** Sağlık tabanının altına inmeden bu hıza ulaşılabilir mi? */
+  safe: boolean;
+  suggestedCalories: number;
+}
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 export function buildPlan(input: PlanInput): Plan {
-  const { sex, age, heightCm, weightKg, bodyFatPct, sports, paceKgPerMonth, today } = input;
+  const { sex, age, heightCm, weightKg, bodyFatPct, sports, today } = input;
   const notices: string[] = [];
 
   const bmiValue = bmi(weightKg, heightCm);
@@ -207,74 +234,102 @@ export function buildPlan(input: PlanInput): Plan {
   const sportKcal = sportKcalPerDay(sports, weightKg);
   const burn = dailyBurn(bmrResult.value, sportKcal);
   const floor = MIN_DAILY_KCAL[sex];
+  const isMinor = age < MIN_ADULT_AGE;
 
-  let targetWeightKg = input.targetWeightKg;
-  let direction: Plan["direction"] =
-    weightKg - targetWeightKg > MAINTAIN_THRESHOLD_KG ? "lose" : "maintain";
-  if (direction === "lose" && age < MIN_ADULT_AGE) {
+  let direction: Plan["direction"] = weightKg - input.targetWeightKg > MAINTAIN_THRESHOLD_KG ? "lose" : "maintain";
+  if (direction === "lose" && isMinor) {
     notices.push("18 yaşından küçükler için kilo verme planı oluşturulmaz; kilonu koruma kalorisi gösteriliyor.");
     direction = "maintain";
   }
+  // Sağlık tabanında bile açık yoksa ya da hedef 3 yıldan uzun sürecekse kilo verme planı kurulamaz.
+  const floorDeficit = burn - floor;
+  if (direction === "lose" && (floorDeficit <= 0 || ((weightKg - input.targetWeightKg) * KCAL_PER_KG) / floorDeficit > MAX_GOAL_DAYS)) {
+    notices.push(
+      `Sağlığın için günlük kalorin ${floor} kcal'nin altına inemez ve şu anki hareketinle bu kalori yeterli açık oluşturmuyor. Kilonu koruma kalorisi gösteriliyor; spor ekleyerek kilo vermeye başlayabilirsin.`,
+    );
+    direction = "maintain";
+  }
+  const targetWeightKg = direction === "maintain" ? weightKg : input.targetWeightKg;
 
-  let dailyCalories = Math.max(burn, floor);
-  let effectiveKgPerMonth = 0;
-  let floorApplied = false;
+  // 18 yaş altında açık oluşturulmaz: en düşük kalori harcamanın kendisi.
+  const minCalories = isMinor ? Math.max(floor, Math.round(burn)) : floor;
+  const maxSafeKgPerMonth = Math.max(0, paceForDailyDeficit(burn - floor));
+  const paceKgPerMonth = direction === "lose" ? input.paceKgPerMonth : 0;
+  const suggestedCalories =
+    direction === "lose"
+      ? Math.max(floor, Math.round(burn - dailyDeficitForPace(paceKgPerMonth)))
+      : Math.max(minCalories, Math.round(burn));
 
+  const chosen = input.dailyCalories ?? suggestedCalories;
+  const dailyCalories = Math.min(Math.max(Math.round(chosen), minCalories), MAX_DAILY_KCAL);
+  const dailyDeficit = Math.round(burn - dailyCalories);
+  const monthlyKg = dailyDeficit > 0 ? paceForDailyDeficit(dailyDeficit) : 0;
+
+  let days = 0;
+  let reachable = true;
   if (direction === "lose") {
-    const raw = bmrResult.value - dailyDeficitForPace(paceKgPerMonth);
-    if (raw >= floor) {
-      dailyCalories = raw;
-      effectiveKgPerMonth = paceKgPerMonth;
-    } else {
-      floorApplied = true;
-      dailyCalories = floor;
-      effectiveKgPerMonth = Math.min(paceKgPerMonth, paceForDailyDeficit(burn - floor));
-      if (effectiveKgPerMonth <= 0) {
-        notices.push(
-          `Sağlığın için günlük hedefin ${floor} kcal'nin altına inemez ve şu anki hareketinle bu kalori açık oluşturmuyor. Spor ekleyerek kilo vermeye başlayabilirsin.`,
-        );
-        direction = "maintain";
-        effectiveKgPerMonth = 0;
-        dailyCalories = Math.max(burn, floor);
-      } else if (effectiveKgPerMonth < paceKgPerMonth) {
-        const pace = effectiveKgPerMonth.toLocaleString("tr-TR", { maximumFractionDigits: 1 });
-        notices.push(
-          `Sağlığın için günlük hedefin ${floor} kcal'nin altına inmiyor. Bu yüzden hareketine göre gerçekçi hızın ayda yaklaşık ${pace} kg.`,
-        );
-      } else {
-        notices.push(`Sağlığın için günlük hedefin ${floor} kcal'nin altına inmiyor. Bu hıza yaptığın sporla ulaşacaksın.`);
-      }
+    days = dailyDeficit > 0 ? Math.ceil(((weightKg - targetWeightKg) * KCAL_PER_KG) / dailyDeficit) : Infinity;
+    reachable = days <= MAX_GOAL_DAYS;
+    if (!reachable) {
+      notices.push(
+        dailyDeficit > 0
+          ? "Bu kaloriyle hedefe ulaşmak 3 yıldan uzun sürer. Kaloriyi biraz düşür ya da spor ekle."
+          : "Bu kalori günlük harcamana eşit ya da fazla; bununla kilo vermezsin. Kaloriyi düşür ya da spor ekle.",
+      );
+      days = 0;
     }
   }
 
-  if (direction === "maintain") targetWeightKg = weightKg;
-  const days = direction === "lose" ? daysToGoal(weightKg, targetWeightKg, effectiveKgPerMonth) : 0;
-
   return {
-    bmi: Math.round(bmiValue * 10) / 10,
+    bmi: round1(bmiValue),
     bmiCategory: bmiCategory(bmiValue),
     bmr: Math.round(bmrResult.value),
     bmrFormula: bmrResult.formula,
     sportKcalPerDay: Math.round(sportKcal),
     dailyBurn: Math.round(burn),
+    minCalories,
     direction,
     targetWeightKg,
-    paceKgPerMonth: direction === "lose" ? paceKgPerMonth : 0,
-    effectiveKgPerMonth: Math.round(effectiveKgPerMonth * 10) / 10,
-    dailyCalories: Math.round(dailyCalories),
-    floorApplied,
+    paceKgPerMonth,
+    maxSafeKgPerMonth: round1(maxSafeKgPerMonth),
+    suggestedCalories,
+    dailyCalories,
+    dailyDeficit,
+    monthlyKg: round1(monthlyKg),
+    reachable,
     days,
     targetDate: toDateKey(addDays(today, days)),
     notices,
   };
 }
 
+/** Hız butonları: her hızın önerdiği kalori ve sağlık tabanına göre güvenli olup olmadığı. */
+export function paceChoices(plan: Pick<Plan, "dailyBurn" | "maxSafeKgPerMonth">, sex: Sex): PaceChoice[] {
+  const floor = MIN_DAILY_KCAL[sex];
+  return PACES.map((p) => ({
+    key: p.key,
+    label: p.label,
+    kgPerMonth: p.kgPerMonth,
+    safe: p.kgPerMonth <= plan.maxSafeKgPerMonth,
+    suggestedCalories: Math.max(floor, Math.round(plan.dailyBurn - dailyDeficitForPace(p.kgPerMonth))),
+  }));
+}
+
+/** Güvenli seçeneklerden istenene en yakın hız (hiçbiri güvenli değilse en yavaşı). */
+export function safePace(requested: number, choices: PaceChoice[]): number {
+  const safe = choices.filter((c) => c.safe && c.kgPerMonth <= requested);
+  return safe.length > 0 ? safe[safe.length - 1].kgPerMonth : choices[0].kgPerMonth;
+}
+
+type PlanProfile = Pick<Profile, "sex" | "birthYear" | "heightCm" | "bodyFatPct" | "sports">;
+
 export function planForProfile(
-  profile: Pick<Profile, "sex" | "birthYear" | "heightCm" | "bodyFatPct" | "sports">,
+  profile: PlanProfile,
   weightKg: number,
   targetWeightKg: number,
   paceKgPerMonth: number,
   today: Date,
+  dailyCalories?: number,
 ): Plan {
   return buildPlan({
     sex: profile.sex,
@@ -285,31 +340,61 @@ export function planForProfile(
     sports: profile.sports,
     targetWeightKg,
     paceKgPerMonth,
+    dailyCalories,
     today,
   });
 }
 
-export function goalFromPlan(
-  plan: Plan,
-  startWeightKg: number,
-  mealCalories: MealCalories,
-  today: Date,
-): Goal {
+/** Planın bir hedef tarihi var mı? (kilo verme ve makul sürede ulaşılabilir) */
+export function planHasDate(plan: Plan): boolean {
+  return plan.direction === "lose" && plan.reachable && plan.days > 0;
+}
+
+export function goalFromPlan(plan: Plan, startWeightKg: number, mealCalories: MealCalories, today: Date): Goal {
+  const todayKey = toDateKey(today);
   return {
     startWeightKg,
-    startDate: toDateKey(today),
+    startDate: todayKey,
     targetWeightKg: plan.targetWeightKg,
     paceKgPerMonth: plan.paceKgPerMonth,
-    targetDate: plan.targetDate,
+    targetDate: planHasDate(plan) ? plan.targetDate : todayKey,
     dailyCalories: plan.dailyCalories,
     mealCalories,
-    lockedUntil:
-      plan.direction === "maintain" ? toDateKey(addDays(today, MAINTAIN_LOCK_DAYS)) : plan.targetDate,
+    // Hedef kilo (yeni plan) bu tarihe kadar sabit; günlük kalori ve öğünler her zaman değiştirilebilir.
+    lockedUntil: planHasDate(plan) ? plan.targetDate : toDateKey(addDays(today, MAINTAIN_LOCK_DAYS)),
   };
 }
 
+/** Hedef kilo (yeni plan) kilitli mi? Günlük kalori ve öğünler bu kilitten etkilenmez. */
 export function isGoalLocked(goal: Goal, todayKey: string): boolean {
   return todayKey < goal.lockedUntil;
+}
+
+/**
+ * Kullanıcı günlük kaloriyi değiştirince: hedef tarihi güncel kiloya ve yeni kaloriye göre yeniden
+ * hesaplanır. Başlangıç, hedef kilo, hız ve kilit tarihi değişmez.
+ */
+export function updateGoalCalories(
+  profile: PlanProfile,
+  goal: Goal,
+  currentWeightKg: number,
+  dailyCalories: number,
+  mealCalories: MealCalories,
+  today: Date,
+): { goal: Goal; plan: Plan } {
+  const plan = planForProfile(profile, currentWeightKg, goal.targetWeightKg, goal.paceKgPerMonth, today, dailyCalories);
+  const reached = currentWeightKg - goal.targetWeightKg <= MAINTAIN_THRESHOLD_KG;
+  // Tarih yalnızca hesaplanabiliyorsa değişir; hedefe ulaşıldıysa bugün.
+  const targetDate = planHasDate(plan) ? plan.targetDate : reached ? toDateKey(today) : goal.targetDate;
+  return {
+    plan,
+    goal: {
+      ...goal,
+      dailyCalories: plan.dailyCalories,
+      mealCalories,
+      targetDate: targetDate < goal.startDate ? goal.startDate : targetDate,
+    },
+  };
 }
 
 // ---------- Öğünler ----------
@@ -333,13 +418,27 @@ export function mealTotal(meals: MealCalories): number {
   return meals.breakfast + meals.lunch + meals.dinner;
 }
 
-/** Bir öğünü değiştirir; öğün MIN_MEAL_KCAL'ın altına inmez. */
+/** Bir öğünü değiştirir; öğün 0'ın altına inmez. */
 export function adjustMeal(meals: MealCalories, meal: Meal, delta: number): MealCalories {
   return { ...meals, [meal]: Math.max(MIN_MEAL_KCAL, meals[meal] + delta) };
 }
 
 export function isMealSplitValid(meals: MealCalories, dailyCalories: number): boolean {
-  return MEALS.every((m) => meals[m] >= MIN_MEAL_KCAL) && mealTotal(meals) === dailyCalories;
+  return MEALS.every((m) => Number.isInteger(meals[m]) && meals[m] >= MIN_MEAL_KCAL) && mealTotal(meals) === dailyCalories;
+}
+
+/**
+ * Günlük kalori değişince öğünleri mevcut oranlarıyla yeniden dağıtır (10'a yuvarlanır, kalan en büyük
+ * öğüne eklenir); böylece kahvaltıyı 0 yapan kullanıcının kahvaltısı 0 kalır. Hepsi 0 ise varsayılan dağılım.
+ */
+export function rescaleMeals(meals: MealCalories, dailyCalories: number): MealCalories {
+  const total = mealTotal(meals);
+  if (total <= 0) return defaultMealCalories(dailyCalories);
+  const scaled = { breakfast: 0, lunch: 0, dinner: 0 } as MealCalories;
+  for (const m of MEALS) scaled[m] = Math.round((meals[m] / total) * dailyCalories / 10) * 10;
+  const largest = MEALS.reduce<Meal>((a, b) => (scaled[b] > scaled[a] ? b : a), "lunch");
+  scaled[largest] += dailyCalories - mealTotal(scaled);
+  return scaled;
 }
 
 /** 05–11 sabah, 11–16 öğle, 16–05 akşam. */

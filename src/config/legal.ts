@@ -1,5 +1,7 @@
 // Gizlilik bilgilendirmesi ve açık kaynak lisansları — metinler tek yerden yönetilir.
 
+import { PHOTO_ANALYSIS_ENABLED } from "./ai";
+
 /** Uygulamanın kaynak kodu (AGPL-3.0 gereği kullanıcılara sunulur). */
 export const SOURCE_REPO_URL = "https://github.com/kaanklcrsln/Kalometre";
 
@@ -12,6 +14,8 @@ export const DATA_REGION_LABEL = "Avrupa, eur3 bölgesi";
 /** Kayıt ekranında ve Ayarlar'da gösterilen kısa aydınlatma metni (sağlık verisi = KVKK özel nitelikli veri). */
 export const PRIVACY_NOTICE =
   `Girdiğin kilo, boy, yaş ve yemek bilgileri yalnızca kalori planını hesaplamak için Google Firebase'de ` +
-  `(${DATA_REGION_LABEL}) saklanır ve başka kimseyle paylaşılmaz; yemek ve sohbet metinlerin analiz için ` +
-  `Google Gemini'ye gönderilir. Hesabının ve verilerinin silinmesini istersen Ayarlar'daki Şikayet ve Öneri ` +
-  `kısmından bize yazabilirsin.`;
+  `(${DATA_REGION_LABEL}) saklanır ve başka kimseyle paylaşılmaz; yemek ve sohbet metinlerin` +
+  (PHOTO_ANALYSIS_ENABLED ? ` ile gönderdiğin yemek fotoğrafları` : ``) +
+  ` analiz için Google Gemini'ye gönderilir` +
+  (PHOTO_ANALYSIS_ENABLED ? ` (fotoğraflar saklanmaz)` : ``) +
+  `. Hesabının ve verilerinin silinmesini istersen Ayarlar'daki Şikayet ve Öneri kısmından bize yazabilirsin.`;

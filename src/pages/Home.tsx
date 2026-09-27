@@ -1,9 +1,11 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Link } from "react-router";
 import { useAvatarMood } from "../avatar/AvatarProvider";
 import { HOME_MOODS } from "../avatar/moods";
 import { DateSwitcher } from "../components/DateSwitcher";
 import { EntryList } from "../components/EntryList";
+import { GoalEditor } from "../components/GoalEditor";
+import { EditIcon } from "../components/Icons";
 import { ProgressRing } from "../components/ProgressRing";
 import { WaterCounter } from "../components/WaterCounter";
 import { useDay } from "../hooks/useDay";
@@ -30,6 +32,7 @@ export default function Home() {
   const day = useDay(uid, date.dateKey, goal);
   const daysLeft = goal ? Math.max(daysBetween(todayKey(), goal.targetDate), 0) : 0;
   const over = day.remaining < 0;
+  const [editing, setEditing] = useState(false);
   const ratio = day.dailyTarget ? Math.min(day.consumed / day.dailyTarget, 1) : 0;
   useAvatarMood(over ? HOME_MOODS.over : day.consumed > 0 ? HOME_MOODS.onTrack : HOME_MOODS.empty);
 
@@ -54,9 +57,14 @@ export default function Home() {
 
       <section className="card stack">
         <div className="row between">
-          <p>
+          <p className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
             <strong style={{ fontSize: 22 }}>{day.consumed}</strong>
             <span className="muted"> / {day.dailyTarget} kcal</span>
+            {goal && (
+              <button type="button" className="btn-inline" onClick={() => setEditing(true)} aria-label="Günlük hedefi düzenle" title="Günlük hedefi düzenle">
+                <EditIcon />
+              </button>
+            )}
           </p>
           <p className={over ? "negative" : "positive"} style={{ fontWeight: 600 }}>
             {over ? `${-day.remaining} kcal fazla` : `${day.remaining} kcal kaldı`}
@@ -86,6 +94,8 @@ export default function Home() {
           <span aria-hidden>›</span>
         </Link>
       )}
+
+      {editing && goal && <GoalEditor uid={uid} profile={profile} goal={goal} onClose={() => setEditing(false)} />}
 
       {day.error && <p className="alert">{day.error}</p>}
       {day.loading ? (

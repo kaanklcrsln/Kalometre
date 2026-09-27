@@ -42,7 +42,7 @@ Proje `kalometre` zaten açık. Yeni bir proje açacaksan:
 - Profildeki kullanıcı adı, giriş yapılan hesabın kullanıcı adıyla aynı olmak zorunda.
 - Sağlık tabanı sunucuda da geçerli: günlük kalori kadında 1200, erkekte 1500'ün altında kaydedilemez; öğün toplamı günlük kaloriye eşit olmalı.
 - `createdAt` sunucu zamanıdır, değiştirilemez; kaydın ham metni ve kategorisi sonradan değiştirilemez.
-- Plan kilitliyken hedef ve profil (isim hariç) değiştirilemez.
+- Plan kilitliyken hedef kilo, başlangıç ve kilit tarihi ve profil (isim hariç) değiştirilemez; günlük kalori, öğünler (0 olabilir) ve hedef tarihi her zaman değişebilir.
 - Günlük AI sayacı yalnızca 1'er artar, azaltılamaz, 50'yi geçemez; gün dokümanı silinemez.
 - Kullanıcı dokümanı istemciden silinemez (hesap silme ileride sunucu tarafında yapılmalı).
 
@@ -97,11 +97,13 @@ npm run deploy:rules                           # Firestore kuralları
 
 - **Renkler:** yalnızca 4 renk — Deep Teal `#4E6E58` (olumlu), Brick Red `#BB0A21` (olumsuz), Coffee Bean `#261C15` ve Porcelain `#F7F7F2` (genel). CSS'te [src/styles.css](src/styles.css) `:root` değişkenleri, SVG/grafiklerde [src/config/theme.ts](src/config/theme.ts).
 - **Font:** `font/` klasöründeki Rubik değişken fontu (normal + italik), derlemede pakete dahil edilir.
-- **Kalori hedefi:** bazal metabolizma − seçilen hızın açığı (Acelem yok 3 / Olması gerektiği gibi 4 / Acelem var 6 kg/ay; 1 kg = 7700 kcal, 1 ay = 30 gün). Spor hedefe eklenmez.
-- **Sağlık tabanı:** günlük hedef kadında 1200, erkekte 1500 kcal'nin altına inmez. Taban devreye girerse hedef tarihi spor dahil tahmini harcamaya (bazal × 1,2 + spor) göre dürüstçe yeniden hesaplanır ve kullanıcıya söylenir. Hedef VKİ < 18,5 ve 18 yaş altında kilo verme reddedilir.
+- **Kalori modeli (tek formül):** günlük harcama = bazal × 1,2 + spor. Seçilen hız bir kalori **önerir**: harcama − hız açığı (Acelem yok 3 / Olması gerektiği gibi 4 / Acelem var 6 kg/ay; 1 kg = 7700 kcal, 1 ay = 30 gün). Günlük kaloriyi kullanıcı seçer (onboarding sonu, Ayarlar ya da ana sayfadaki kalem); hedef tarihi her zaman kalan kilo × 7700 / (harcama − günlük kalori) ile hesaplanır. Sonradan değiştirince en son girilen kilo kullanılır.
+- **Sağlık tabanı:** günlük kalori kadında 1200, erkekte 1500 kcal'nin altına inmez (18 yaş altında harcamanın altına inmez). Bu tabana inmeden ulaşılamayan hızlar "güvenli değil" olarak kapatılır ve güvenli en yüksek hız gösterilir. Tabanda bile açık yoksa ya da hedef 3 yıldan uzun sürecekse koruma planı önerilir. Hedef VKİ < 18,5 ve 18 yaş altında kilo verme reddedilir.
 - **Spor:** her antrenman 1 saat sayılır; harcama = (MET − 1) × kg × gün / 7. MET değerleri [src/config/sports.ts](src/config/sports.ts).
-- **Kilit:** günlük kalori ve öğün dağılımı hedef tarihine kadar (koruma planında 30 gün) değiştirilemez; yeni kilo girmek hedefi değiştirmez. Kilit bitince Ayarlar → "Yeni plan oluştur".
-- **Sohbet:** Gemini ile sohbet; son 10 mesaj gönderilir, geçmiş yalnızca bellekte tutulur. Her mesaj günlük 50 AI hakkından düşer.
+- **Kilit:** yalnızca hedef kilo (yeni plan) hedef tarihine kadar (koruma planında 30 gün) sabittir; kilit bitince Ayarlar → "Yeni plan oluştur". Günlük kalori ve öğünler her zaman değiştirilebilir; öğün 0 olabilir.
+- **Sohbet (KaloAI):** Gemini ile sohbet; son 6 mesaj gönderilir, geçmiş yalnızca bellekte tutulur. Her mesaj ve fotoğraf günlük 50 AI hakkından düşer.
+- **Sohbetten öğüne ekleme:** yanıt JSON gelir (`reply`, `food`, `kcal`). Kullanıcı yediği bir şeyi anlatırsa (soru sorması sayılmaz) yazı kutusunun üstünde "Öğüne ekleyelim mi?" kutusu çıkar: Sabah / Öğle / Akşam (saate uygun olan vurgulu) ya da ×. Öğün seçilince "Kalorisini biliyorum" paneli ad ve kalori dolu açılır; yalnızca Geri / Devam.
+- **Fotoğraftan kalori:** kamera düğmesi (telefonda kamera ya da galeri). Fotoğraf tarayıcıda uzun kenarı 768 px olacak şekilde küçültülür, JPEG'e çevrilir (EXIF/konum silinir), yalnızca Gemini'ye gönderilir ve hiçbir yerde saklanmaz; sonuç aynı ekleme kutusuna düşer.
 
 ## Kalo+ (ücretli üyelik) — altyapı hazır, ödeme henüz bağlı değil
 
@@ -126,6 +128,19 @@ npm run deploy:rules                           # Firestore kuralları
 5. Kuralların gerçek projede güncel olduğundan emin ol: `npm run deploy:rules`.
 
 Emülatörde: `npm run admin -- <kullanıcıadı> --emulator` (anahtar gerekmez).
+
+### Kullanıcı yönetimi (admin)
+
+Proje Spark (ücretsiz) planında olduğu için sunucu fonksiyonu yok; işlemler ikiye ayrılır:
+
+- **Uygulama içinde** (Ayarlar → sağ üstteki profil ikonu, yalnızca admin): onboarding'i bitirmiş kullanıcıları listeler (Kalo+ durumuyla). **Kaldır**: kullanıcının tüm verilerini siler (profil, kilolar, günler, yemek kayıtları, üyelik, istekler, notlar) ve hesabı `disabledUsers/{uid}` ile kilitler; kişi giriş yapınca "Hesabın kaldırıldı" görür ve kurallar yeni profil açmasını engeller. "Kaldırılanlar" listesinden kilit açılabilir (silinen veriler geri gelmez).
+- **Bilgisayardan** (Admin SDK, hizmet hesabı anahtarıyla; bkz. yukarıdaki admin adımları):
+  ```powershell
+  npm run users -- list                                   # tüm giriş hesapları (admin / kaldırıldı / profil yok)
+  npm run users -- password <kullanıcıadı> <yeni-şifre>   # şifre değiştir + açık oturumları kapat
+  npm run users -- delete <kullanıcıadı>                  # giriş hesabı + tüm veriler (adminler silinemez)
+  ```
+  Emülatörde sona `--emulator` ekle. Başkasının şifresini değiştirmek ve giriş hesabını tamamen silmek yalnızca bu komutlarla mümkündür.
 
 ### Şikayet ve öneri notları
 

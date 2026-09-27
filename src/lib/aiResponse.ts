@@ -1,6 +1,6 @@
 // Gemini yanıtını doğrular ve temizler. Model şemaya uysa bile değerlere körü körüne güvenilmez.
 
-import type { AiAnalysis, FoodItem } from "../types";
+import type { AiAnalysis, ChatReply, FoodItem } from "../types";
 
 const MAX_ITEMS = 20;
 const MAX_KCAL_PER_ITEM = 5000;
@@ -43,4 +43,25 @@ export function parseAiAnalysis(raw: string): AiAnalysis | null {
     assumptions: cleanString(obj.assumptions, 400),
     isFood,
   };
+}
+
+/**
+ * Sohbet yanıtı (JSON: reply, food, kcal). Yanıt JSON değilse düz metin kabul edilir; yemek önerisi
+ * yalnızca adı ve 1–5000 arası kalorisi olduğunda döner.
+ */
+export function parseChatReply(raw: string): ChatReply | null {
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    const text = raw.trim();
+    return text ? { text, food: null } : null;
+  }
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
+  const text = cleanString(obj.reply, 1000);
+  if (!text) return null;
+  const name = cleanString(obj.food, 80);
+  const kcal = clampNumber(obj.kcal, MAX_KCAL_PER_ITEM);
+  return { text, food: name && kcal > 0 ? { name, kcal } : null };
 }

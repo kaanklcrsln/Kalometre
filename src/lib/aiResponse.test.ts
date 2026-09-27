@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAiAnalysis } from "./aiResponse";
+import { parseAiAnalysis, parseChatReply } from "./aiResponse";
 
 describe("parseAiAnalysis", () => {
   it("geçerli yanıtı ayrıştırır", () => {
@@ -42,5 +42,27 @@ describe("parseAiAnalysis", () => {
       { name: "A", amount: "x", grams: 0, kcal: 120 },
       { name: "Bilinmeyen", amount: "", grams: 5000, kcal: 5000 },
     ]);
+  });
+});
+
+describe("parseChatReply", () => {
+  it("yemek anlatılınca öneri döner", () => {
+    expect(parseChatReply(JSON.stringify({ reply: "Yaklaşık 750 kalori.", food: "2 lahmacun ve 1 ayran", kcal: 749.6 }))).toEqual({
+      text: "Yaklaşık 750 kalori.",
+      food: { name: "2 lahmacun ve 1 ayran", kcal: 750 },
+    });
+  });
+  it("soru ya da sohbet: öneri yok", () => {
+    expect(parseChatReply(JSON.stringify({ reply: "Selam!", food: "", kcal: 0 }))).toEqual({ text: "Selam!", food: null });
+    expect(parseChatReply(JSON.stringify({ reply: "Selam!", food: "elma", kcal: 0 }))?.food).toBeNull();
+  });
+  it("kalori sınırlanır, ad kırpılır", () => {
+    const r = parseChatReply(JSON.stringify({ reply: "x", food: "a".repeat(200), kcal: 99999 }));
+    expect(r?.food).toEqual({ name: "a".repeat(80), kcal: 5000 });
+  });
+  it("düz metin yanıt kabul edilir, boş yanıt null", () => {
+    expect(parseChatReply("Selam!")).toEqual({ text: "Selam!", food: null });
+    expect(parseChatReply(JSON.stringify({ reply: "", food: "", kcal: 0 }))).toBeNull();
+    expect(parseChatReply("  ")).toBeNull();
   });
 });

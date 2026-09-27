@@ -13,6 +13,7 @@ import {
 import { app } from "../config/firebase";
 import {
   buildChatInstruction,
+  buildImageInstruction,
   buildSystemInstruction,
   CHAT_HISTORY_LIMIT,
   CHAT_MAX_OUTPUT_TOKENS,
@@ -22,8 +23,8 @@ import {
   GEMINI_THINKING_LEVEL,
   MAX_INPUT_CHARS,
 } from "../config/ai";
-import { parseAiAnalysis } from "../lib/aiResponse";
-import type { AiAnalysis, ChatMessage, EntryCategory } from "../types";
+import { parseAiAnalysis, parseChatReply } from "../lib/aiResponse";
+import type { AiAnalysis, ChatMessage, ChatReply, EntryCategory } from "../types";
 import { reserveAiRequest } from "./db";
 
 const ai = getAI(app, { backend: new GoogleAIBackend() });
@@ -50,6 +51,15 @@ const generationConfig: GenerationConfig = {
   responseSchema,
   ...(GEMINI_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } } : {}),
 } as GenerationConfig;
+
+// Sohbet yanıtı: metin + (kullanıcı yediği bir şeyi anlattıysa) yemek adı ve tahmini kalori.
+const chatResponseSchema = Schema.object({
+  properties: {
+    reply: Schema.string(),
+    food: Schema.string(),
+    kcal: Schema.number(),
+  },
+});
 
 export type AiErrorKind =
   | "daily-limit"
@@ -135,7 +145,32 @@ export async function analyzeFood(
 }
 
 /**
- * Sohbet: yalnızca son CHAT_HISTORY_LIMIT mesaj gönderilir. Her mesaj günlük kotadan düşer.
+ * Fotoğraftan kalori: küçültülmüş JPEG (base64) tek başına gönderilir; fotoğraf hiçbir yerde saklanmaz.
+ * Yazılı analizle aynı şema ve doğrulama; günlük kotadan 1 düşer.
+ */
+export async function analyzeFoodImage(uid: string, todayKey: string, base64: string, mimeType: string): Promise<AiAnalysis> {
+  try {
+    const allowed = await reserveAiRequest(uid, todayKey, DAILY_AI_REQUEST_LIMIT);
+    if (!allowed) throw new AiServiceError("daily-limit", MESSAGES["daily-limit"]);
+
+    const model = getGenerativeModel(ai, {
+      model: GEMINI_MODEL,
+      systemInstruction: buildImageInstruction(),
+      generationConfig,
+    });
+    const result = await model.generateContent([{ inlineData: { data: base64, mimeType } }]);
+    const parsed = parseAiAnalysis(result.response.text());
+    if (!parsed) throw new AiServiceError("bad-response", MESSAGES["bad-response"]);
+    return parsed;
+  } catch (error) {
+    console.error("[Kalometre] Fotoğraf analizi hatası", error);
+    throw toServiceError(error);
+  }
+}
+
+/**
+ * Sohbet: yalnızca son CHAT_HISTORY_LIMIT mesaj (metin) gönderilir. Her mesaj günlük kotadan düşer.
+ * Yanıt JSON: metin + kullanıcı yediği bir şeyi anlattıysa yemek adı ve tahmini kalori.
  */
 export async function sendChatMessage(
   uid: string,
@@ -143,7 +178,7 @@ export async function sendChatMessage(
   history: ChatMessage[],
   message: string,
   context: ChatContext,
-): Promise<string> {
+): Promise<ChatReply> {
   const input = message.trim().slice(0, MAX_INPUT_CHARS);
   try {
     const allowed = await reserveAiRequest(uid, todayKey, DAILY_AI_REQUEST_LIMIT);
@@ -155,6 +190,8 @@ export async function sendChatMessage(
       generationConfig: {
         // Kısa yanıt talimatına ek sert sınır: kontrolden çıkan uzun yanıt maliyet üretmesin.
         maxOutputTokens: CHAT_MAX_OUTPUT_TOKENS,
+        responseMimeType: "application/json",
+        responseSchema: chatResponseSchema,
         ...(GEMINI_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL } } : {}),
       } as GenerationConfig,
     });
@@ -166,9 +203,9 @@ export async function sendChatMessage(
       parts: [{ text: m.text }],
     }));
     const result = await model.generateContent({ contents });
-    const text = result.response.text().trim();
-    if (!text) throw new AiServiceError("bad-response", MESSAGES["bad-response"]);
-    return text;
+    const reply = parseChatReply(result.response.text());
+    if (!reply) throw new AiServiceError("bad-response", MESSAGES["bad-response"]);
+    return reply;
   } catch (error) {
     console.error("[Kalometre] Sohbet hatası", error);
     throw toServiceError(error);
